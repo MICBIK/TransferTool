@@ -19,6 +19,10 @@ export const SETTING_DEFS = {
   smtp_from: { sensitive: false },
   /** 最近一次 SMTP/站长邮箱配置是否已通过“发送测试邮件”验证 */
   smtp_verified: { sensitive: false },
+  /** 持续低于阈值时，余额提醒邮件的最短重复间隔（小时），默认 6 */
+  alert_repeat_hours: { sensitive: false },
+  /** 余额归零自动停该上游全部渠道（阶段 3 才接入实际动作），默认关闭 */
+  auto_disable_at_zero: { sensitive: false },
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFS;

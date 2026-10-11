@@ -5,6 +5,7 @@ import { apiError } from './http.js';
 import { requireAuth } from './middleware/auth.js';
 import { authRoutes } from './routes/auth.js';
 import { settingsRoutes } from './routes/settings.js';
+import { upstreamRoutes } from './routes/upstreams.js';
 import type { Services } from './services/index.js';
 import { serveSpa } from './staticFiles.js';
 
@@ -48,7 +49,8 @@ export function createApp(s: Services): Hono {
   // ---- 受保护区：以下 /api/* 均需登录 ----
   app.use('/api/*', requireAuth(s));
   app.route('/api/settings', settingsRoutes(s));
-  // 阶段 2+：app.route('/api/upstreams', ...)、app.route('/api/channels', ...)
+  app.route('/api/upstreams', upstreamRoutes(s));
+  // 阶段 3+：app.route('/api/channels', ...)
 
   app.all('/api/*', (c) => apiError(c, 404, 'not_found', '接口不存在'));
 

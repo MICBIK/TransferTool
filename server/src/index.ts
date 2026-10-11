@@ -19,10 +19,15 @@ async function main(): Promise<void> {
     console.log(`[server] TransferTool 已启动，监听端口 ${info.port}`);
   });
 
+  // 进程内调度：启动时立即刷新一次，之后每分钟检查到期的上游
+  services.scheduler.start();
+
   const shutdown = () => {
-    server.close(() => {
-      handle.close();
-      process.exit(0);
+    void services.scheduler.stop().finally(() => {
+      server.close(() => {
+        handle.close();
+        process.exit(0);
+      });
     });
     setTimeout(() => process.exit(1), 5000).unref();
   };
