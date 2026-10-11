@@ -125,7 +125,7 @@ export interface UpstreamView {
   updatedAt: number;
 }
 
-function parseDomains(json: string): string[] {
+export function parseDomains(json: string): string[] {
   try {
     const v: unknown = JSON.parse(json);
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];

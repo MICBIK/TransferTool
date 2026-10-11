@@ -21,6 +21,9 @@ export interface JsonResponse {
 }
 
 export interface JsonRequest {
+  method?: 'GET' | 'POST' | 'PUT';
+  /** 非 undefined 时作为 JSON 请求体发送 */
+  body?: unknown;
   headers?: Record<string, string>;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -33,6 +36,11 @@ export interface JsonRequest {
  *  - 响应体大小上限
  */
 export async function getJson(fetchFn: FetchFn, url: string, req: JsonRequest = {}): Promise<JsonResponse> {
+  return requestJson(fetchFn, url, req);
+}
+
+/** 同 getJson，但可带方法与 JSON 请求体（本站渠道管理使用）。超时、不跟随重定向、大小上限相同。 */
+export async function requestJson(fetchFn: FetchFn, url: string, req: JsonRequest = {}): Promise<JsonResponse> {
   const signals = [AbortSignal.timeout(req.timeoutMs ?? DEFAULT_TIMEOUT_MS)];
   if (req.signal) signals.push(req.signal);
   const signal = AbortSignal.any(signals);
@@ -41,10 +49,16 @@ export async function getJson(fetchFn: FetchFn, url: string, req: JsonRequest = 
   let text: string;
   try {
     res = await fetchFn(url, {
-      method: 'GET',
+      method: req.method ?? 'GET',
       redirect: 'manual',
       signal,
-      headers: { Accept: 'application/json', 'User-Agent': USER_AGENT, ...req.headers },
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': USER_AGENT,
+        ...(req.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+        ...req.headers,
+      },
+      ...(req.body !== undefined ? { body: JSON.stringify(req.body) } : {}),
     });
     if (res.status >= 300 && res.status < 400) {
       throw new UpstreamRequestError(`上游返回了重定向（HTTP ${res.status}），为避免把凭证发往其他地址，已拒绝跟随。请把站点地址改成最终地址（例如改用 https）`, 'redirect');

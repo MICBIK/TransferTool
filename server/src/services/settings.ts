@@ -21,8 +21,12 @@ export const SETTING_DEFS = {
   smtp_verified: { sensitive: false },
   /** 持续低于阈值时，余额提醒邮件的最短重复间隔（小时），默认 6 */
   alert_repeat_hours: { sensitive: false },
-  /** 余额归零自动停该上游全部渠道（阶段 3 才接入实际动作），默认关闭 */
+  /** 余额归零自动停该上游全部渠道，默认关闭 */
   auto_disable_at_zero: { sensitive: false },
+  /** 本站 new-api 连接：地址、访问令牌（加密）、用户 ID（加密，可选） */
+  own_site_url: { sensitive: false },
+  own_site_token: { sensitive: true },
+  own_site_user_id: { sensitive: true },
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFS;

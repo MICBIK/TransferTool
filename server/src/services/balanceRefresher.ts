@@ -1,5 +1,6 @@
 import type { BalanceResult, createAdapters } from '../adapters/index.js';
 import type { AlertCandidate, AlertService } from './alertService.js';
+import type { ChannelAutomation } from './channelAutomation.js';
 import type { BalanceStore } from './balanceStore.js';
 import type { Clock } from './clock.js';
 import type { UpstreamRow, UpstreamService } from './upstreams.js';
@@ -52,6 +53,8 @@ export class BalanceRefresher {
       store: BalanceStore;
       adapters: ReturnType<typeof createAdapters>;
       alerts: AlertService;
+      /** 余额归零自动停/恢复渠道；缺省时不做任何渠道动作 */
+      automation?: ChannelAutomation;
       clock: Clock;
       concurrency?: number;
     },
@@ -111,6 +114,14 @@ export class BalanceRefresher {
 
     if (candidates.length > 0 && !this.abort.signal.aborted) {
       summary.alertsSent = (await this.deps.alerts.process(candidates)).sent;
+    }
+    if (candidates.length > 0 && !this.abort.signal.aborted && this.deps.automation) {
+      try {
+        await this.deps.automation.process(candidates.map((c) => ({ upstream: c.upstream, balanceUsd: c.balanceUsd, keyLimit: c.keyLimit })));
+      } catch (err) {
+        // 渠道自动启停出错不能影响余额刷新本身
+        console.error(`[refresher] 渠道自动启停出错：${err instanceof Error ? err.name : 'unknown'}`);
+      }
     }
     return summary;
   }

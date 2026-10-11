@@ -3,6 +3,7 @@ import { createSub2ApiAdapter } from './sub2api.js';
 import type { Adapter, AdapterDeps, AdapterUpstream, BalanceResult, FetchContext } from './types.js';
 
 export type { Adapter, AdapterDeps, AdapterUpstream, BalanceResult, BalanceKind, FetchContext, FetchFn, UpstreamType } from './types.js';
+export { createOwnSiteClient, OLD_VERSION_MESSAGE, type SiteErrorKind, type ChannelStatus, type ChannelTestResult, type OwnSiteClient, type OwnSiteConn, type SiteChannel, type SiteResult, type StatusManyResult } from './ownsite.js';
 export { normalizeDomain, normalizeOptionalUrl, normalizeSiteUrl, UrlError } from './url.js';
 
 /** 按上游类型分发。外部请求全部经注入的 fetch，便于测试。 */

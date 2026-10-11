@@ -15,6 +15,13 @@
       "when": 1791732787070,
       "tag": "0001_upstreams_balance",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791733758380,
+      "tag": "0002_channels",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { createAdapters, type FetchFn } from '../adapters/index.js';
+import { createAdapters, createOwnSiteClient, type FetchFn } from '../adapters/index.js';
 import type { AppConfig } from '../config.js';
 import type { Db } from '../db/client.js';
 import { Scheduler } from '../jobs/scheduler.js';
@@ -6,6 +6,9 @@ import { AdminSettingsService } from './adminSettings.js';
 import { AlertService } from './alertService.js';
 import { BalanceRefresher } from './balanceRefresher.js';
 import { BalanceStore } from './balanceStore.js';
+import { ChannelAutomation } from './channelAutomation.js';
+import { ChannelService } from './channels.js';
+import { OwnSiteService } from './ownSite.js';
 import { AuditService } from './audit.js';
 import { AuthState } from './authState.js';
 import { systemClock, type Clock } from './clock.js';
@@ -40,6 +43,8 @@ export interface Services {
   store: BalanceStore;
   upstreams: UpstreamService;
   alerts: AlertService;
+  ownSite: OwnSiteService;
+  channels: ChannelService;
   refresher: BalanceRefresher;
   /** 只构造、不启动：由 index.ts 在进程入口调用 start()，测试中永远不会启动 */
   scheduler: Scheduler;
@@ -56,11 +61,16 @@ export function buildServices(config: AppConfig, db: Db, overrides: ServiceOverr
   const mailer = new Mailer(settings, overrides.transportFactory ?? defaultTransportFactory);
   const login = new LoginService({ config, settings, authState, guard, codes, mailer, audit });
   const adminSettings = new AdminSettingsService({ config, settings, login, audit });
-  const adapters = createAdapters({ fetch: overrides.fetch ?? fetch, clock });
+  const adapterDeps = { fetch: overrides.fetch ?? fetch, clock };
+  const adapters = createAdapters(adapterDeps);
+  const ownSiteClient = createOwnSiteClient(adapterDeps);
   const store = new BalanceStore(db);
   const upstreams = new UpstreamService({ config, db, store, audit, clock, adapters });
   const alerts = new AlertService({ store, mailer, settings, clock });
-  const refresher = new BalanceRefresher({ db, upstreams, store, adapters, alerts, clock });
-  const scheduler = new Scheduler({ refresher, store, clock });
-  return { config, clock, settings, authState, audit, guard, codes, mailer, login, adminSettings, store, upstreams, alerts, refresher, scheduler };
+  const ownSite = new OwnSiteService({ settings, audit, client: ownSiteClient });
+  const channels = new ChannelService({ db, ownSite, client: ownSiteClient, upstreams, audit, clock });
+  const automation = new ChannelAutomation({ channels, settings, audit });
+  const refresher = new BalanceRefresher({ db, upstreams, store, adapters, alerts, automation, clock });
+  const scheduler = new Scheduler({ refresher, store, channels, clock });
+  return { config, clock, settings, authState, audit, guard, codes, mailer, login, adminSettings, store, upstreams, alerts, ownSite, channels, refresher, scheduler };
 }

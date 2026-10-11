@@ -1,4 +1,4 @@
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 /** 键值设置。敏感项以 enc:v1: 密文存储（encrypted=1）。 */
 export const settings = sqliteTable('settings', {
@@ -110,3 +110,33 @@ export const alerts = sqliteTable('alerts', {
   lastResult: text('last_result'),
   updatedAt: integer('updated_at').notNull(),
 });
+
+/**
+ * 本站渠道缓存（不含渠道 key）。site_id 预留多站，目前恒为 1。
+ * manual_upstream=1 表示归属由站长手动指定，同步时不会被自动归类覆盖。
+ * auto_disabled_at 非空表示该渠道是“余额归零自动停渠道”动作停掉的（用于只恢复本工具停的渠道）。
+ */
+export const channels = sqliteTable(
+  'channels',
+  {
+    siteId: integer('site_id').notNull().default(1),
+    channelId: integer('channel_id').notNull(),
+    name: text('name').notNull(),
+    type: integer('type').notNull().default(0),
+    baseUrl: text('base_url').notNull().default(''),
+    /** JSON 字符串数组 */
+    groups: text('groups').notNull().default('[]'),
+    /** 1 启用、2 手动禁用、3 自动禁用 */
+    status: integer('status').notNull(),
+    priority: integer('priority').notNull().default(0),
+    weight: integer('weight').notNull().default(0),
+    /** 毫秒 */
+    responseTime: integer('response_time').notNull().default(0),
+    tag: text('tag').notNull().default(''),
+    upstreamId: integer('upstream_id').references(() => upstreams.id, { onDelete: 'set null' }),
+    manualUpstream: integer('manual_upstream', { mode: 'boolean' }).notNull().default(false),
+    autoDisabledAt: integer('auto_disabled_at'),
+    syncedAt: integer('synced_at').notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.siteId, t.channelId] }), index('channels_upstream_idx').on(t.upstreamId)],
+);
