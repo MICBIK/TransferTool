@@ -28,6 +28,17 @@ interface SettingsView {
 
 const message = useMessage();
 
+interface OwnSiteView {
+  url: string;
+  tokenSet: boolean;
+  userIdSet: boolean;
+  configured: boolean;
+  sync?: { ok: boolean; error: string | null; total: number } | null;
+}
+const own = reactive({ url: '', token: '', userId: '', tokenSet: false, userIdSet: false, configured: false });
+const ownBusy = reactive({ save: false, test: false });
+const ownTest = ref<{ ok: boolean; text: string } | null>(null);
+
 const state = reactive({
   loginMethod: 'password' as SettingsView['loginMethod'],
   adminEmail: '',
@@ -58,7 +69,73 @@ function errorText(err: unknown): string {
 
 async function load() {
   apply(await api<SettingsView>('/api/settings'));
+  await loadOwn();
   loaded.value = true;
+}
+
+function applyOwn(v: OwnSiteView) {
+  own.url = v.url;
+  own.token = '';
+  own.userId = '';
+  own.tokenSet = v.tokenSet;
+  own.userIdSet = v.userIdSet;
+  own.configured = v.configured;
+}
+
+async function loadOwn() {
+  applyOwn(await api<OwnSiteView>('/api/settings/own-site'));
+}
+
+function ownBody(clearUserId = false) {
+  const body: { url: string; token?: string; userId?: string | null } = { url: own.url.trim() };
+  if (own.token) body.token = own.token;
+  if (clearUserId) body.userId = null;
+  else if (own.userId.trim()) body.userId = own.userId.trim();
+  return body;
+}
+
+async function saveOwn(clearUserId = false) {
+  if (!own.url.trim()) return message.warning('请填写本站地址；要断开本站请点“断开本站”');
+  if (!own.tokenSet && !own.token) return message.warning('请填写本站访问令牌');
+  ownBusy.save = true;
+  try {
+    const v = await api<OwnSiteView>('/api/settings/own-site', { method: 'PUT', body: ownBody(clearUserId) });
+    applyOwn(v);
+    ownTest.value = null;
+    if (v.sync && !v.sync.ok) message.warning(`已保存，但首次同步渠道失败：${v.sync.error ?? ''}`, { duration: 8000 });
+    else message.success(v.sync ? `已保存，已同步 ${v.sync.total} 个渠道` : '已保存');
+  } catch (err) {
+    message.error(errorText(err));
+  } finally {
+    ownBusy.save = false;
+  }
+}
+
+async function testOwn() {
+  ownBusy.test = true;
+  ownTest.value = null;
+  try {
+    const body = ownBody();
+    const r = await api<{ ok: boolean; total: number | null; error: string | null }>('/api/settings/own-site/test', { body });
+    ownTest.value = r.ok ? { ok: true, text: `连接成功${r.total !== null ? `，本站共有 ${r.total} 个渠道` : ''}` } : { ok: false, text: r.error ?? '连接失败' };
+  } catch (err) {
+    ownTest.value = { ok: false, text: errorText(err) };
+  } finally {
+    ownBusy.test = false;
+  }
+}
+
+async function disconnectOwn() {
+  ownBusy.save = true;
+  try {
+    applyOwn(await api<OwnSiteView>('/api/settings/own-site', { method: 'PUT', body: { url: '' } }));
+    ownTest.value = null;
+    message.success('已断开本站（已缓存的渠道数据保留，重新连接后会刷新）');
+  } catch (err) {
+    message.error(errorText(err));
+  } finally {
+    ownBusy.save = false;
+  }
 }
 
 async function changePassword() {
@@ -201,6 +278,28 @@ onMounted(() => void load().catch((err) => message.error(errorText(err))));
       </n-form>
     </n-card>
 
+    <n-card title="本站（new-api）连接">
+      <n-form label-placement="left" label-width="90">
+        <n-form-item label="本站地址"><n-input v-model:value="own.url" placeholder="https://your-site.example.com" /></n-form-item>
+        <n-form-item label="访问令牌">
+          <n-input v-model:value="own.token" type="password" show-password-on="click" autocomplete="new-password" :placeholder="own.tokenSet ? '已设置，留空表示不修改' : '本站的访问令牌'" />
+        </n-form-item>
+        <n-form-item label="用户 ID">
+          <n-input v-model:value="own.userId" autocomplete="off" :placeholder="own.userIdSet ? '已设置，留空表示不修改' : '可选；旧版本站需要（New-Api-User）'" style="max-width: 280px" />
+          <n-button v-if="own.userIdSet" style="margin-left: 8px" size="small" :disabled="ownBusy.save" @click="saveOwn(true)">清除</n-button>
+        </n-form-item>
+        <n-alert type="info" :show-icon="false" style="margin-bottom: 16px">
+          建议使用带范围的令牌，只授予：渠道读取、渠道操作、log:read。权限不足时，“测试连接”或操作会提示缺少的具体权限。本工具只读取渠道的基本信息，不会请求或保存渠道密钥（key）。
+        </n-alert>
+        <n-space align="center">
+          <n-button type="primary" :loading="ownBusy.save" @click="saveOwn()">保存</n-button>
+          <n-button :loading="ownBusy.test" :disabled="!own.url.trim() || (!own.tokenSet && !own.token)" @click="testOwn">测试连接</n-button>
+          <n-button v-if="own.configured" quaternary type="error" :disabled="ownBusy.save" @click="disconnectOwn">断开本站</n-button>
+        </n-space>
+        <n-alert v-if="ownTest" :type="ownTest.ok ? 'success' : 'error'" :show-icon="false" style="margin-top: 12px">{{ ownTest.text }}</n-alert>
+      </n-form>
+    </n-card>
+
     <n-card title="余额提醒">
       <n-form label-placement="left" label-width="120">
         <n-form-item label="重复提醒间隔">
@@ -209,7 +308,7 @@ onMounted(() => void load().catch((err) => message.error(errorText(err))));
         </n-form-item>
         <n-form-item label="余额归零自动停渠道">
           <n-switch v-model:value="state.autoDisableAtZero" />
-          <span style="margin-left: 12px; opacity: 0.7">默认关闭。当前版本只保存此开关，实际停用渠道的动作将在接入本站渠道后生效。</span>
+          <span style="margin-left: 12px; opacity: 0.7">默认关闭。打开后，上游余额（查询成功时）≤ 0 会批量停用该上游当前启用的渠道，并记录哪些是本工具停的；余额回升到 0 以上时只恢复这些渠道。需先配置上方本站连接，所有动作写入审计日志。</span>
         </n-form-item>
         <n-alert v-if="!state.smtpVerified" type="info" :show-icon="false" style="margin-bottom: 16px">提醒邮件使用上方的 SMTP 与站长邮箱，请先发送测试邮件验证。</n-alert>
         <n-button type="primary" :loading="busy.alerts" @click="saveAlerts">保存提醒设置</n-button>

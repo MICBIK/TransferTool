@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { NAlert, NButton, NCard, NDescriptions, NDescriptionsItem, NPopconfirm, NRadioButton, NRadioGroup, NSpace, NTag, NText, useMessage } from 'naive-ui';
 import { api, ApiError } from '../api';
 import BalanceChart from '../components/BalanceChart.vue';
+import UpstreamChannels from '../components/UpstreamChannels.vue';
 import UpstreamForm from '../components/UpstreamForm.vue';
 import { STATUS_META, TYPE_LABEL, formatAgo, formatEta, getHistory, getUpstream, refreshOne, usd, type HistoryPoint, type Upstream } from '../upstreams';
 
@@ -120,6 +121,10 @@ onMounted(() => void load());
       </template>
       <balance-chart v-if="points.length > 1" :points="points" :threshold="upstream.threshold" :emergency-threshold="upstream.emergencyThreshold" />
       <n-text v-else depth="3">暂无足够的历史数据（至少需要两次成功刷新）</n-text>
+    </n-card>
+
+    <n-card title="接入的渠道与分组" size="small">
+      <upstream-channels :upstream-id="upstream.id" :upstream-name="upstream.name" />
     </n-card>
 
     <n-card title="配置" size="small">
