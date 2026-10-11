@@ -4,6 +4,9 @@ import { RouterLink } from 'vue-router';
 import { NButton, NCard, NEmpty, NGrid, NGridItem, NSpace, NTag, NText, useMessage } from 'naive-ui';
 import { ApiError } from '../api';
 import { channelSummary, type ChannelCount } from '../channels';
+import HealthNotices from '../components/HealthNotices.vue';
+import HealthTag from '../components/HealthTag.vue';
+import { getHealth, type HealthOverview, type UpstreamRollup } from '../health';
 import { STATUS_META, TYPE_LABEL, formatAgo, formatEta, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
@@ -11,6 +14,8 @@ const upstreams = ref<Upstream[]>([]);
 const loaded = ref(false);
 const counts = ref<Map<number | null, ChannelCount>>(new Map());
 const channelsConfigured = ref(false);
+const health = ref<HealthOverview | null>(null);
+const rollups = computed(() => new Map<number, UpstreamRollup>((health.value?.upstreams ?? []).map((r) => [r.upstreamId, r])));
 const refreshing = ref<Set<number> | 'all'>(new Set());
 const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -29,6 +34,7 @@ async function load() {
     if (s) {
       channelsConfigured.value = s.configured;
       counts.value = new Map(s.summary.map((c) => [c.upstreamId, c]));
+      health.value = await getHealth().catch(() => health.value);
     }
   } catch (err) {
     if (!loaded.value) message.error(errorText(err));
@@ -84,6 +90,8 @@ onBeforeUnmount(() => clearInterval(timer));
       </n-space>
     </n-space>
 
+    <health-notices :health="health" />
+
     <n-empty v-if="upstreams.length === 0" description="还没有上游。添加一个 new-api / sub2api 上游后，这里会显示余额与消耗速度。" style="margin-top: 60px">
       <template #extra>
         <router-link to="/upstreams/new" custom v-slot="{ navigate }"><n-button type="primary" @click="navigate">添加上游</n-button></router-link>
@@ -122,6 +130,13 @@ onBeforeUnmount(() => clearInterval(timer));
                 <n-text :type="counts.get(u.id)!.enabled === 0 ? 'error' : undefined">启用 {{ counts.get(u.id)!.enabled }} / 共 {{ counts.get(u.id)!.total }}</n-text>
               </template>
               <n-text v-else depth="3">暂无</n-text>
+            </div>
+            <div v-if="channelsConfigured && rollups.get(u.id)">
+              渠道健康
+              <health-tag :status="rollups.get(u.id)!.status" :title="'取该上游启用且有请求的渠道中最差的状态'" />
+              <n-text depth="3" style="margin-left: 6px">
+                {{ rollups.get(u.id)!.status === 'idle' ? (rollups.get(u.id)!.enabledChannels === 0 ? '没有启用的渠道' : '近 1 小时无请求') : `${rollups.get(u.id)!.counted} 个渠道有请求` }}
+              </n-text>
             </div>
             <div>
               <n-text depth="3">最后刷新 {{ formatAgo(u.lastCheckedAt, now) }}</n-text>
