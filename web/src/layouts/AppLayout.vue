@@ -13,7 +13,15 @@ const options: MenuOption[] = [
   { key: 'channels', label: link('/channels', '渠道') },
   { key: 'settings', label: link('/settings', '设置') },
 ];
-const active = computed(() => String(route.name ?? 'overview'));
+const active = computed(() => (String(route.name ?? '').startsWith('upstream') ? 'overview' : String(route.name ?? 'overview')));
+const title = computed(() => {
+  const name = String(route.name ?? '');
+  if (name === 'settings') return '设置';
+  if (name === 'channels') return '渠道';
+  if (name === 'upstream-new') return '添加上游';
+  if (name === 'upstream') return '上游详情';
+  return '总览';
+});
 
 async function onLogout() {
   await logout();
@@ -32,7 +40,7 @@ async function onLogout() {
     </n-layout-sider>
     <n-layout>
       <n-layout-header bordered style="padding: 14px 24px; font-weight: 500">
-        {{ route.name === 'settings' ? '设置' : route.name === 'channels' ? '渠道' : '总览' }}
+        {{ title }}
       </n-layout-header>
       <n-layout content-style="padding: 24px" style="height: calc(100% - 53px)">
         <router-view />
