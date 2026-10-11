@@ -176,3 +176,58 @@ describe('本站渠道客户端', () => {
     expect(new URL(calls[0]!.url).pathname).toBe('/api/channel/test/9');
   });
 });
+
+describe('本站日志客户端', () => {
+  const lg = (id: number, over: Record<string, unknown> = {}) => ({ id, created_at: 1000 + id, type: 2, channel: 3, use_time: 2, content: '', ip: '9.9.9.9', token_name: 'secret-name', ...over });
+
+  it('请求参数、只挑选所需字段；兼容 channel_id 与纯数组响应', async () => {
+    const site = fakeOwnSite({ logArray: true });
+    site.state.logs = [lg(1), lg(2, { channel: undefined, channel_id: 9, type: 5, content: 'boom' })];
+    const { client, calls } = mk(site.handle);
+    const r = await client.listLogs(conn, { type: 5, start: 900, end: 2000, page: 1, pageSize: 50 });
+    expect(r.ok && r.logs).toEqual([{ id: 2, createdAt: 1002, type: 5, channelId: 9, useTime: 2, content: 'boom' }]);
+    expect(JSON.stringify(r)).not.toContain('secret-name');
+    expect(r.ok && r.total).toBeUndefined();
+    const u = new URL(calls[0]!.url);
+    expect(u.pathname).toBe('/api/log/');
+    expect(Object.fromEntries(u.searchParams)).toEqual({ p: '1', page_size: '50', type: '5', start_timestamp: '900', end_timestamp: '2000' });
+    expect(calls[0]!.headers.authorization).toBe(`Bearer ${OWN_TOKEN}`);
+    expect(calls[0]!.redirect).toBe('manual');
+  });
+
+  it('分页响应带 total', async () => {
+    const site = fakeOwnSite();
+    site.state.logs = [lg(1), lg(2), lg(3)];
+    const { client } = mk(site.handle);
+    const r = await client.listLogs(conn, { type: 2, start: 0, end: 5000, page: 1, pageSize: 2 });
+    expect(r.ok && r.total).toBe(3);
+  });
+
+  it('缺少 log:read 权限 → 明确提示，且不会用旧写法重试', async () => {
+    const site = fakeOwnSite();
+    site.state.logScopeDenied = true;
+    const { client, calls } = mk(site.handle);
+    const r = await client.listLogs(conn, { type: 2, start: 0, end: 1, page: 1, pageSize: 100 });
+    expect(r).toMatchObject({ ok: false, kind: 'scope', error: '本站令牌缺少权限：log:read' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('HTTP 200 + success:false 视为业务错误；旧版 401 回退不带 Bearer', async () => {
+    const site = fakeOwnSite();
+    site.state.logBusinessError = true;
+    const biz = await mk(site.handle).client.listLogs(conn, { type: 2, start: 0, end: 1, page: 1, pageSize: 100 });
+    expect(biz).toMatchObject({ ok: false, kind: 'business', error: '无权查看日志' });
+    const { client, calls } = mk((c) => (c.headers.authorization === OWN_TOKEN ? jsonRes({ success: true, data: { items: [lg(1)], total: 1 } }) : jsonRes({ success: false }, 401)));
+    const ok = await client.listLogs(conn, { type: 2, start: 0, end: 5000, page: 1, pageSize: 100 });
+    expect(ok.ok && ok.logs).toHaveLength(1);
+    expect(calls).toHaveLength(2);
+  });
+
+  it('404 提示本站不支持日志接口；令牌不会出现在错误里', async () => {
+    const { client } = mk(() => new Response('nope', { status: 404 }));
+    const r = await client.listLogs(conn, { type: 2, start: 0, end: 1, page: 1, pageSize: 100 });
+    expect(!r.ok && r.error).toContain('/api/log/');
+    const net = await mk(() => ({ throw: new Error(`connect ${OWN_TOKEN}`) })).client.listLogs(conn, { type: 2, start: 0, end: 1, page: 1, pageSize: 100 });
+    expect(JSON.stringify(net)).not.toContain(OWN_TOKEN);
+  });
+});

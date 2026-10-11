@@ -8,6 +8,9 @@ import { BalanceRefresher } from './balanceRefresher.js';
 import { BalanceStore } from './balanceStore.js';
 import { ChannelAutomation } from './channelAutomation.js';
 import { ChannelService } from './channels.js';
+import { ChannelStatsStore } from './channelStatsStore.js';
+import { HealthService } from './healthService.js';
+import { LogIngestor } from './logIngestor.js';
 import { OwnSiteService } from './ownSite.js';
 import { AuditService } from './audit.js';
 import { AuthState } from './authState.js';
@@ -27,6 +30,8 @@ export interface ServiceOverrides {
   fetch?: FetchFn;
   /** 仅测试使用：降低 PBKDF2 迭代次数以加速 */
   hashIterations?: number;
+  /** 仅测试使用：缩小日志分页大小与单轮页数上限，以便覆盖分段逻辑 */
+  logIngest?: { pageSize?: number; pageBudget?: number };
 }
 
 export interface Services {
@@ -45,6 +50,9 @@ export interface Services {
   alerts: AlertService;
   ownSite: OwnSiteService;
   channels: ChannelService;
+  channelStats: ChannelStatsStore;
+  logIngestor: LogIngestor;
+  health: HealthService;
   refresher: BalanceRefresher;
   /** 只构造、不启动：由 index.ts 在进程入口调用 start()，测试中永远不会启动 */
   scheduler: Scheduler;
@@ -70,7 +78,10 @@ export function buildServices(config: AppConfig, db: Db, overrides: ServiceOverr
   const ownSite = new OwnSiteService({ settings, audit, client: ownSiteClient });
   const channels = new ChannelService({ db, ownSite, client: ownSiteClient, upstreams, audit, clock });
   const automation = new ChannelAutomation({ channels, settings, audit });
+  const channelStats = new ChannelStatsStore(db);
+  const logIngestor = new LogIngestor({ settings, ownSite, client: ownSiteClient, stats: channelStats, clock, ...overrides.logIngest });
+  const health = new HealthService({ stats: channelStats, channels, upstreams, ingestor: logIngestor, settings, clock });
   const refresher = new BalanceRefresher({ db, upstreams, store, adapters, alerts, automation, clock });
-  const scheduler = new Scheduler({ refresher, store, channels, clock });
-  return { config, clock, settings, authState, audit, guard, codes, mailer, login, adminSettings, store, upstreams, alerts, ownSite, channels, refresher, scheduler };
+  const scheduler = new Scheduler({ refresher, store, channels, ingestor: logIngestor, stats: channelStats, clock });
+  return { config, clock, settings, authState, audit, guard, codes, mailer, login, adminSettings, store, upstreams, alerts, ownSite, channels, channelStats, logIngestor, health, refresher, scheduler };
 }

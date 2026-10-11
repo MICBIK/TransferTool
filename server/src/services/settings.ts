@@ -27,6 +27,11 @@ export const SETTING_DEFS = {
   own_site_url: { sensitive: false },
   own_site_token: { sensitive: true },
   own_site_user_id: { sensitive: true },
+  /** 渠道健康：成功率 ≥ ok 为正常、≥ degraded 为降级（百分数），默认 95 / 80 */
+  health_ok_rate: { sensitive: false },
+  health_degraded_rate: { sensitive: false },
+  /** 本站日志增量拉取的游标状态（JSON）：下次起点、边界秒内已入库的日志 id、分段大小 */
+  log_ingest_state: { sensitive: false },
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFS;

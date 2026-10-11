@@ -26,6 +26,34 @@ export interface SiteChannel {
   tag: string;
 }
 
+/** 日志聚合所需的字段。只挑选这些字段，其余（含用户、令牌、IP 等）一律丢弃。 */
+export interface SiteLog {
+  /** 日志 id；缺失时为 null（无法按 id 去重） */
+  id: number | null;
+  /** 秒 */
+  createdAt: number;
+  /** 2 = 消费（成功请求），5 = 错误 */
+  type: number;
+  channelId: number;
+  /** 秒 */
+  useTime: number;
+  /** 错误信息（已截断） */
+  content: string;
+}
+
+export type LogType = 2 | 5;
+
+export interface LogQuery {
+  type: LogType;
+  /** 含，unix 秒 */
+  start: number;
+  /** 含，unix 秒 */
+  end: number;
+  /** 从 1 开始 */
+  page: number;
+  pageSize: number;
+}
+
 export type SiteErrorKind = 'scope' | 'auth' | 'network' | 'unsupported' | 'notfound' | 'business' | 'http';
 export type SiteResult<T> = ({ ok: true } & T) | { ok: false; kind: SiteErrorKind; error: string };
 
@@ -44,6 +72,7 @@ export interface ChannelTestResult {
 }
 
 export const PAGE_SIZE = 100;
+export const LOG_SCOPE_MESSAGE = '本站令牌缺少权限：log:read';
 const MAX_PAGES = 200;
 const BATCH_CHUNK = 200;
 export const TEST_TIMEOUT_MS = 60_000;
@@ -73,7 +102,7 @@ export function createOwnSiteClient(deps: AdapterDeps) {
     conn: OwnSiteConn,
     method: 'GET' | 'POST' | 'PUT',
     path: string,
-    opts: { body?: unknown; timeoutMs?: number; ctx?: FetchContext; allowBusiness?: boolean } = {},
+    opts: { body?: unknown; timeoutMs?: number; ctx?: FetchContext; allowBusiness?: boolean; scopeMessage?: string } = {},
   ): Promise<Outcome> {
     const url = `${conn.siteUrl}${path}`;
     const secrets = [conn.token];
@@ -87,7 +116,7 @@ export function createOwnSiteClient(deps: AdapterDeps) {
       const body = asRecord(res.body);
       const msg = safeMessage(body?.message ?? asRecord(body?.error)?.message, secrets);
 
-      if (mentions(res, SCOPE_CODE)) return { ok: false, kind: 'scope', status: res.status, error: `本站令牌缺少权限：${msg || '请为令牌授予渠道读取、渠道操作与 log:read 权限'}` };
+      if (mentions(res, SCOPE_CODE)) return { ok: false, kind: 'scope', status: res.status, error: opts.scopeMessage ?? `本站令牌缺少权限：${msg || '请为令牌授予渠道读取、渠道操作与 log:read 权限'}` };
       if (mentions(res, LEGACY_RETIRED_CODE)) return { ok: false, kind: 'auth', status: res.status, error: '旧版访问令牌已失效，请到本站重新生成' };
       if (res.status === 401 || res.status === 403) {
         return { ok: false, kind: 'auth', status: res.status, error: `本站拒绝了凭证（HTTP ${res.status}）${msg ? `：${msg}` : ''}，请检查访问令牌与用户 ID` };
@@ -142,7 +171,41 @@ export function createOwnSiteClient(deps: AdapterDeps) {
     return { ok: true as const, ...page };
   }
 
+  function parseLog(raw: unknown): SiteLog | null {
+    const r = asRecord(raw);
+    const createdAt = asNumber(r?.created_at);
+    if (!r || createdAt === undefined || createdAt <= 0) return null;
+    const id = asNumber(r.id);
+    return {
+      id: id !== undefined && Number.isInteger(id) ? id : null,
+      createdAt: Math.floor(createdAt),
+      type: asNumber(r.type) ?? 0,
+      // 新版字段为 channel，兼容 channel_id
+      channelId: asNumber(r.channel) ?? asNumber(r.channel_id) ?? 0,
+      useTime: Math.max(0, asNumber(r.use_time) ?? 0),
+      content: typeof r.content === 'string' ? r.content.slice(0, 2000) : '',
+    };
+  }
+
   return {
+    /**
+     * 拉取一页日志（GET /api/log/，需 log:read）。新版在前（按 id 倒序）。
+     * total 缺失（响应是纯数组）时为 undefined。只读，不写本站任何数据。
+     */
+    async listLogs(conn: OwnSiteConn, q: LogQuery, ctx?: FetchContext): Promise<SiteResult<{ logs: SiteLog[]; total?: number; rawCount: number }>> {
+      const qs = `p=${q.page}&page_size=${q.pageSize}&type=${q.type}&start_timestamp=${q.start}&end_timestamp=${q.end}`;
+      const out = await send(conn, 'GET', `/api/log/?${qs}`, { ctx, scopeMessage: LOG_SCOPE_MESSAGE });
+      if (!out.ok) return out.kind === 'notfound' ? { ...out, error: '本站不支持日志接口（/api/log/），请确认本站版本' } : out;
+      const page = pageItems(out.body);
+      if (!page) return { ok: false, kind: 'http', error: '本站日志列表的格式无法识别，请确认这是 new-api 站点' };
+      const logs: SiteLog[] = [];
+      for (const raw of page.items) {
+        const l = parseLog(raw);
+        if (l) logs.push(l);
+      }
+      return { ok: true, logs, total: page.total, rawCount: page.items.length };
+    },
+
     /** 测试连接：只读一页（1 条），不写任何数据。 */
     async probe(conn: OwnSiteConn, ctx?: FetchContext): Promise<SiteResult<{ total: number | null }>> {
       const page = await fetchPage(conn, 1, 1, ctx);
