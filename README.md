@@ -4,85 +4,7 @@
 
 单用户、自部署：一个 Docker 镜像、一个 Node.js 22 进程、一个 SQLite 文件，不依赖 PostgreSQL / Redis。
 
-> 当前进度：阶段 3（本站渠道）。渠道健康看板见 [docs/PLAN.md](docs/PLAN.md) 中的后续阶段。
-
-## 部署（Docker Compose）
-
-```bash
-git clone <本仓库地址> TransferTool && cd TransferTool
-
-# 1. 准备配置
-cp .env.example .env
-#    编辑 .env，至少填写 ENCRYPTION_KEY、SESSION_SECRET、ADMIN_PASSWORD
-openssl rand -base64 32   # 用于 ENCRYPTION_KEY
-openssl rand -base64 48   # 用于 SESSION_SECRET
-
-# 2. 数据目录（容器内以 uid 1000 的 node 用户运行）
-mkdir -p data && chown 1000:1000 data
-
-# 3. 构建并启动
-docker compose up -d --build
-docker compose logs -f
-```
-
-服务监听容器内 3000 端口，`docker-compose.yml` 默认只绑定到宿主机 `127.0.0.1:3000`，由反代对外提供 HTTPS。首次启动会用 `ADMIN_PASSWORD` 初始化管理员密码；登录后请在“设置”页修改，之后 `.env` 里的 `ADMIN_PASSWORD` 不再生效。
-
-> **务必备份 `ENCRYPTION_KEY` 和 `data/` 目录。** SMTP 密码等敏感设置用 `ENCRYPTION_KEY` 加密后存放在 `data/transfertool.db` 中，密钥丢失或更换后这些内容无法解密，需要重新填写。
-
-### 环境变量
-
-| 变量 | 说明 | 默认 |
-| --- | --- | --- |
-| `PORT` | 监听端口 | `3000` |
-| `DATA_DIR` | SQLite 文件目录 | `/data` |
-| `ENCRYPTION_KEY` | **必填**。32 字节 base64，AES-256-GCM 加密敏感字段；缺失时启动失败 | — |
-| `SESSION_SECRET` | **必填**。至少 32 字符，签名会话 Cookie | — |
-| `ADMIN_PASSWORD` | 初始管理员密码（库里还没有密码哈希时使用） | — |
-| `EMERGENCY_PASSWORD` | 可选。SMTP 故障时的兜底登录密码，配置后始终可用密码登录 | — |
-| `COOKIE_SECURE` | 会话 Cookie 是否带 `Secure`；HTTPS 反代下保持 `true`，仅本机 http 调试时设 `false` | `true` |
-| `TRUST_PROXY` | 是否信任反代的 `X-Forwarded-For` 来识别客户端 IP（登录失败按 IP 锁定）；直接暴露端口时必须设为 `false` | `true` |
-| `TZ` | 时区 | — |
-
-### 反向代理：tools.tzcode.top → 127.0.0.1:3000
-
-HTTPS 由反代层负责。两种写法任选其一，请求头里的 `Host` 与客户端 IP 都需要透传。
-
-**Nginx**
-
-```nginx
-server {
-    listen 80;
-    server_name tools.tzcode.top;
-    return 301 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl http2;
-    server_name tools.tzcode.top;
-
-    ssl_certificate     /etc/letsencrypt/live/tools.tzcode.top/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/tools.tzcode.top/privkey.pem;
-
-    client_max_body_size 1m;
-
-    location / {
-        proxy_pass http://127.0.0.1:3000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-    }
-}
-```
-
-**Caddy**（自动申请并续期证书）
-
-```caddyfile
-tools.tzcode.top {
-    encode zstd gzip
-    reverse_proxy 127.0.0.1:3000
-}
-```
+> 功能已全部完成（阶段 1–4）。完整规格见 [docs/PLAN.md](docs/PLAN.md)；部署步骤见文末“部署”。
 
 ## 上游余额与提醒
 
@@ -112,6 +34,7 @@ tools.tzcode.top {
 | 设置页 → 余额提醒 | 重复提醒间隔（小时，1–168） | 6 |
 | 设置页 → 余额提醒 | 余额归零自动停渠道开关 | 关闭（见下方“本站渠道”） |
 | 设置页 → 本站连接 | 本站地址、访问令牌（加密）、用户 ID（可选，加密） | 未配置 |
+| 设置页 → 渠道健康 | “正常”成功率线、“降级”成功率线（百分数，降级线须低于正常线） | 95 / 80 |
 | 每个上游 | 提醒阈值、紧急阈值（可空，须小于提醒阈值）、刷新间隔（分钟）、汇率系数、充值页地址（new-api 默认 `<站点>/console/topup`）、匹配域名、启用开关、备注 | 间隔 10 分钟，汇率 1 |
 
 ## 本站渠道
@@ -128,6 +51,27 @@ tools.tzcode.top {
   - 总览卡片显示该上游接入渠道“启用 / 总数”。
 - **余额归零自动停渠道**（设置页开关，默认关闭）：某上游一次**成功**的余额刷新结果 ≤ 0（sub2api 的 Key 限额用完同样算）时，先同步一次本站，再批量停用该上游**当前为启用状态**的渠道，并把“是本工具停的”记录在数据库里；之后一次成功刷新显示余额 > 0 时，只恢复记录里**仍是手动禁用**的那些渠道（站长在此期间自己改过状态的渠道不会被动），然后清除记录。刷新失败、余额未知、订阅制一律不动作；本站不可达时本轮跳过。在面板里手动启停某渠道会接管它，不再被自动恢复。停用/恢复/失败/跳过都写入 `audit_log`（`channel.auto_disabled`、`channel.auto_restored` 等）。恢复不受开关影响：已经被本工具停掉的渠道，余额回来就会恢复。
 
+## 渠道健康看板
+
+本工具每 5 分钟从本站拉取使用日志和错误日志，**只保存 5 分钟粒度的聚合结果，不保存任何原始日志**，据此给每个渠道判定健康状态。
+
+- **前提**：本站访问令牌需要 `log:read` 权限（缺少时本站返回 `ACCESS_TOKEN_SCOPE_DENIED`，渠道页与总览页会提示“本站令牌缺少权限：log:read”）；本站需要开启**错误日志记录**，否则只有成功请求、成功率会被高估。
+- **拉取**：`GET /api/log/?p=<页>&page_size=100&type=<2|5>&start_timestamp=…&end_timestamp=…`（`type=2` 消费日志 = 成功请求，`type=5` 错误日志），兼容 `data.items` 与 `data` 为数组两种响应；字段取 `created_at`、`type`、`channel`（兼容 `channel_id`）、`use_time`、`content`。在渠道同步之后执行，进程内串行、不重叠，失败只记录并显示在页面上，下一轮自动重试。
+- **增量与不重不漏**：游标（下次窗口起点）存在 `settings` 里，首次只回溯 1 小时。每轮拉取闭区间 `[游标, 现在 − 30 秒]`（留出 30 秒让日志落库），消费与错误两类各自翻页直到取完。若某个窗口的日志超过单轮上限（每类 50 页 × 100 条），就把时间窗口对半切分，只提交**完整拉取**的分段，游标只推进到最后一个完整入库的分段末尾，剩余部分下个节拍（1 分钟后）继续，直到追平。每个分段的统计与游标在同一个数据库事务里提交；边界那一秒内已入库的日志 id 也会记下来用于去重，翻页期间出现的重复条目同样只计一次。
+- **聚合**：表 `channel_stats`，按渠道 × 5 分钟桶累计 `requests`（消费 + 错误）、`errors`、`total_use_time`（成功请求的 `use_time` 之和，秒）和错误样本（归一化后的 Top 5 错误信息及次数，每条最多 200 字符；请求 ID、UUID、长数字、`sk-…` / `Bearer …` 形态的凭证会被抹掉）。同一个桶多次写入时相加合并。保留 30 天，每天清理一次。
+- **状态判定**（阈值可在设置页调整，默认 95 / 80）：
+  - 近 1 小时没有请求 → **空闲**；
+  - 近 30 分钟有请求却没有一次成功 → **异常**（即使 1 小时成功率不低）；
+  - 否则按近 1 小时成功率：≥ 95% **正常**；80%–95% **降级**；< 80% **异常**。
+- **展示**：
+  - “渠道”页新增健康列：状态色、近 1 小时 / 24 小时成功率、平均耗时（成功请求）、最近成功时间；
+  - 上游详情页的“接入的渠道与分组”里，每个渠道有近 24 小时成功率趋势小图（没有请求的时段留空）和错误 Top 5；
+  - 总览卡片显示该上游的整体健康：取其**启用且有请求**的渠道里最差的状态，已停用和空闲的渠道不参与；
+  - 近 24 小时有消费日志却一条错误日志都没有时，页面提示“请确认本站已开启错误日志记录”（仅提示，不当作故障）；日志拉取失败时同样在页面顶部显示原因。
+- **接口**（均需登录）：`GET /api/health`（全部渠道的健康、各上游汇总、拉取状态、阈值）、`POST /api/health/ingest`（立即拉取一次，站点出错返回 502）、`GET /api/health/channels/:id`（单渠道 24 小时趋势与错误 Top 5，`bucketMinutes` 可选 5/15/30/60，默认 30）、`GET /api/health/upstreams/:id`（上游汇总 + 其名下每个渠道的趋势与错误）。
+
+“预计耗尽时间”在总览卡片、上游详情和提醒邮件里使用同一份估算（`estimateBurn`：按最近 24 小时成功快照的下降速度，剔除充值造成的上升段），三处显示一致。
+
 ## 登录与安全
 
 - **登录方式**（设置页）：`仅密码`（默认）/ `仅邮件验证码` / `密码或邮件验证码`。需先配置 SMTP 与站长邮箱并“发送测试邮件”成功，才能启用含验证码的方式。
@@ -138,7 +82,7 @@ tools.tzcode.top {
 - 敏感设置（SMTP 密码等）加密存储，接口返回永远只给掩码；敏感操作写入 `audit_log`。
 - 除 `/api/auth/*` 与 `/healthz` 外，所有 `/api/*` 都需要登录。
 
-忘记密码且没有配置紧急密码时：停止容器，删除 `data/transfertool.db` 中 `auth` 表对应记录（或整个库，注意会丢失全部设置），在 `.env` 设置新的 `ADMIN_PASSWORD` 后重启。
+忘记密码的处理见文末“部署 → 日常运维”。
 
 ## 本地开发
 
@@ -170,9 +114,9 @@ npm run dev:web
 server/            后端（Hono + Drizzle + better-sqlite3）
   src/
     adapters/      上游适配器（new-api / sub2api）与本站渠道客户端，外部请求只经注入的 fetch
-    jobs/          进程内调度器（余额刷新、本站渠道同步、快照清理）
+    jobs/          进程内调度器（余额刷新、本站渠道同步、日志聚合、过期数据清理）
     routes/        HTTP 路由
-    services/      业务逻辑（加密、密码、登录、验证码、邮件、设置、上游、提醒状态机、渠道缓存/归类、自动停恢复…）
+    services/      业务逻辑（加密、密码、登录、验证码、邮件、设置、上游、提醒状态机、渠道缓存/归类、自动停恢复、日志聚合与健康判定…）
     middleware/    鉴权等中间件
     db/            schema 与数据库连接/迁移
   drizzle/         drizzle-kit 生成的迁移
@@ -180,3 +124,137 @@ server/            后端（Hono + Drizzle + better-sqlite3）
 web/               前端（Vue 3 + Vite + Naive UI）
 docs/PLAN.md       完整规格与分阶段计划
 ```
+
+## 部署
+
+目标环境：一台能跑 Docker 的服务器，域名 `tools.tzcode.top` 解析到它，由 Nginx 或 Caddy 反代到 `127.0.0.1:3000` 并提供 HTTPS。整个服务是一个容器、一个 SQLite 文件。
+
+### 1. 准备配置（.env）
+
+```bash
+git clone <本仓库地址> TransferTool && cd TransferTool
+cp .env.example .env
+
+openssl rand -base64 32   # 填入 ENCRYPTION_KEY
+openssl rand -base64 48   # 填入 SESSION_SECRET
+# 编辑 .env：至少填写 ENCRYPTION_KEY、SESSION_SECRET、ADMIN_PASSWORD
+chmod 600 .env
+```
+
+| 变量 | 说明 | 默认 |
+| --- | --- | --- |
+| `PORT` | 监听端口 | `3000` |
+| `DATA_DIR` | SQLite 文件目录（compose 里已固定为 `/data` 并挂载 `./data`） | `/data` |
+| `ENCRYPTION_KEY` | **必填**。32 字节 base64，AES-256-GCM 加密敏感字段；缺失时启动失败 | — |
+| `SESSION_SECRET` | **必填**。至少 32 字符，签名会话 Cookie | — |
+| `ADMIN_PASSWORD` | 初始管理员密码（库里还没有密码哈希时使用，之后不再生效） | — |
+| `EMERGENCY_PASSWORD` | 可选。SMTP 故障时的兜底登录密码，配置后始终可用密码登录 | — |
+| `COOKIE_SECURE` | 会话 Cookie 是否带 `Secure`；HTTPS 反代下保持 `true`，仅本机 http 调试时设 `false` | `true` |
+| `TRUST_PROXY` | 是否信任反代的 `X-Forwarded-For` 来识别客户端 IP（登录失败按 IP 锁定）；直接暴露端口时必须设为 `false` | `true` |
+| `TZ` | 时区 | `Asia/Shanghai`（`.env.example`） |
+
+> **`ENCRYPTION_KEY` 一旦使用就不要更换，并且务必单独备份。** 上游凭证、本站令牌、SMTP 密码等都用它加密后存放在 `data/transfertool.db` 里；密钥丢失或更换后这些内容无法解密，需要全部重新填写。`.env` 含密钥，不要提交到任何仓库。
+
+### 2. 用 Docker Compose 启动
+
+```bash
+mkdir -p data && chown 1000:1000 data   # 容器内以 uid 1000 的 node 用户运行
+docker compose up -d --build
+docker compose logs -f                  # 看到“TransferTool 已启动，监听端口 3000”即成功
+curl -s http://127.0.0.1:3000/healthz   # {"ok":true}
+```
+
+`docker-compose.yml` 只把端口绑定到宿主机 `127.0.0.1:3000`，不会直接暴露到公网；`restart: unless-stopped` 保证重启后自动拉起；镜像自带健康检查（`/healthz`）。服务启动时会自动执行数据库迁移，并立即刷新一次上游、同步一次本站渠道、拉取一次日志。
+
+### 3. 反向代理：tools.tzcode.top → 127.0.0.1:3000
+
+HTTPS 由反代层负责。两种写法任选其一，`Host` 与客户端 IP 都需要透传（`TRUST_PROXY=true` 依赖它）。
+
+**Nginx**
+
+```nginx
+server {
+    listen 80;
+    server_name tools.tzcode.top;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name tools.tzcode.top;
+
+    ssl_certificate     /etc/letsencrypt/live/tools.tzcode.top/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/tools.tzcode.top/privkey.pem;
+
+    client_max_body_size 1m;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        # 渠道“测试”最长会等本站 60 秒
+        proxy_read_timeout 90s;
+    }
+}
+```
+
+**Caddy**（自动申请并续期证书；默认就会透传 `X-Forwarded-For`）
+
+```caddyfile
+tools.tzcode.top {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3000 {
+        transport http {
+            response_header_timeout 90s
+        }
+    }
+}
+```
+
+### 4. 首次登录与初始配置
+
+1. 打开 `https://tools.tzcode.top`，用 `.env` 里的 `ADMIN_PASSWORD` 登录（首次启动时已用它初始化管理员密码）。
+2. 进入“设置”页立刻**修改密码**；改完后 `.env` 里的 `ADMIN_PASSWORD` 不再生效，可以从 `.env` 删掉。
+3. 配置 SMTP 与站长邮箱，点“发送测试邮件”验证通过后，才能启用邮件验证码登录和低余额邮件提醒。启用验证码登录前建议先配置 `EMERGENCY_PASSWORD`。
+4. 在“设置”→“本站连接”填写本站地址与访问令牌（用户 ID 仅旧版本站需要），点“测试连接”。建议使用带范围的令牌，只授予渠道读取、渠道操作和 `log:read`；本站需开启错误日志记录。
+5. 回到“总览”添加上游，设置阈值与匹配域名；渠道会按 `base_url` 自动归到对应上游，健康数据在第一轮日志拉取后出现。
+
+### 5. 升级
+
+```bash
+cd TransferTool
+# 升级前先备份（见下）
+git pull
+docker compose up -d --build   # 重新构建并滚动替换容器；启动时自动执行新的数据库迁移
+docker compose logs --tail 50
+```
+
+- `data/` 与 `.env` 不受影响。迁移只增不删，一般无需手动处理；**降级到旧版本前请先用升级前的备份恢复数据库**，因为旧版本不认识新表结构。
+- 想固定版本，可以 `git checkout <tag 或 commit>` 后再构建。
+
+### 6. 备份与恢复
+
+需要备份的只有两样：`data/`（SQLite 库，含 WAL 文件）和 `.env`（尤其是 `ENCRYPTION_KEY`）。
+
+```bash
+# 冷备份（推荐，几秒钟的停机；日志拉取有游标，停机期间的日志之后会自动补齐）
+docker compose stop
+tar czf transfertool-backup-$(date +%F).tar.gz data .env
+docker compose start
+
+# 热备份（不停机；宿主机需安装 sqlite3）
+sqlite3 data/transfertool.db ".backup 'transfertool-$(date +%F).db'"
+```
+
+备份文件里同时包含加密后的凭证和 `.env` 中的密钥，请像对待密码一样保管（加密存放、限制权限）。可以用 cron 每天跑一次冷/热备份并只保留最近若干份。
+
+恢复：`docker compose stop`，用备份替换 `data/`（热备份则把 `.db` 文件复制为 `data/transfertool.db`，并删除 `data/` 下残留的 `transfertool.db-wal` / `-shm`），确认 `.env` 里的 `ENCRYPTION_KEY` 与备份时一致，再 `docker compose start`。
+
+### 7. 日常运维
+
+- 查看日志：`docker compose logs -f`（日志里不含凭证）。
+- 余额刷新、渠道同步、日志拉取都在进程内定时执行，无需另配 cron；失败原因显示在对应页面上，并在下一轮自动重试。
+- 修改 `.env` 后需 `docker compose up -d` 重新创建容器才会生效。
+- 忘记密码且没有配置紧急密码：停止容器，删除 `data/transfertool.db` 中 `auth` 表对应记录（或整个库，注意会丢失全部设置），在 `.env` 设置新的 `ADMIN_PASSWORD` 后重启。
