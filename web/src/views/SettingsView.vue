@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import {
   NAlert,
   NButton,
@@ -221,6 +221,15 @@ async function saveSmtp(): Promise<boolean> {
   }
 }
 
+/** 测试邮件按钮不可用时告诉用户缺什么 */
+const testBlocker = computed(() => {
+  const missing: string[] = [];
+  if (!state.adminEmail.trim()) missing.push('站长邮箱');
+  if (!state.smtp.host.trim()) missing.push('SMTP 主机');
+  if (!state.smtp.from.trim()) missing.push('发件人');
+  return missing.length ? `请先填写${missing.join('、')}` : '';
+});
+
 async function onSaveSmtp() {
   if (await saveSmtp()) message.success('邮件配置已保存，请发送测试邮件验证');
 }
@@ -288,11 +297,15 @@ onMounted(() => void load().catch((err) => message.error(errorText(err))));
         <n-form-item label="密码">
           <n-input v-model:value="state.smtp.pass" type="password" show-password-on="click" autocomplete="new-password" :placeholder="state.smtp.passSet ? '已设置，留空表示不修改' : ''" />
         </n-form-item>
-        <n-form-item label="发件人"><n-input v-model:value="state.smtp.from" placeholder="TransferTool &lt;noreply@example.com&gt;" /></n-form-item>
+        <n-form-item label="发件人">
+          <n-input v-model:value="state.smtp.from" placeholder="TransferTool &lt;noreply@example.com&gt;" />
+          <template #feedback>域名需在 SMTP 服务商处验证过（如 Resend 要求发件域名已验证）</template>
+        </n-form-item>
         <n-space align="center">
           <n-button type="primary" :loading="busy.smtp" @click="onSaveSmtp">保存</n-button>
-          <n-button :loading="busy.test" :disabled="!state.smtp.host || !state.smtp.from || !state.adminEmail" @click="sendTest">保存并发送测试邮件</n-button>
+          <n-button :loading="busy.test" :disabled="testBlocker !== ''" @click="sendTest">保存并发送测试邮件</n-button>
           <span v-if="state.smtpVerified" style="color: var(--n-success-color, #18a058)">已验证</span>
+          <span v-else-if="testBlocker" style="opacity: 0.7">{{ testBlocker }}</span>
         </n-space>
       </n-form>
     </n-card>

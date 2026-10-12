@@ -87,6 +87,10 @@ export class AdminSettingsService {
     }
     const smtp = patch.smtp;
     if (smtp) {
+      // 填了主机就必须有发件人，否则保存成功却无法发送测试邮件
+      const host = smtp.host ?? settings.get('smtp_host') ?? '';
+      const from = smtp.from ?? settings.get('smtp_from') ?? '';
+      if (host !== '' && from === '') throw new SettingsValidationError('请填写发件人地址（需使用 SMTP 服务商已验证的域名）');
       if (smtp.host !== undefined) mailConfigChanged = put('smtp_host', smtp.host, 'smtp.host') || mailConfigChanged;
       if (smtp.port !== undefined) mailConfigChanged = put('smtp_port', String(smtp.port), 'smtp.port') || mailConfigChanged;
       if (smtp.secure !== undefined) mailConfigChanged = put('smtp_secure', String(smtp.secure), 'smtp.secure') || mailConfigChanged;
