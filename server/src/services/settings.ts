@@ -19,6 +19,19 @@ export const SETTING_DEFS = {
   smtp_from: { sensitive: false },
   /** 最近一次 SMTP/站长邮箱配置是否已通过“发送测试邮件”验证 */
   smtp_verified: { sensitive: false },
+  /** 持续低于阈值时，余额提醒邮件的最短重复间隔（小时），默认 6 */
+  alert_repeat_hours: { sensitive: false },
+  /** 余额归零自动停该上游全部渠道，默认关闭 */
+  auto_disable_at_zero: { sensitive: false },
+  /** 本站 new-api 连接：地址、访问令牌（加密）、用户 ID（加密，可选） */
+  own_site_url: { sensitive: false },
+  own_site_token: { sensitive: true },
+  own_site_user_id: { sensitive: true },
+  /** 渠道健康：成功率 ≥ ok 为正常、≥ degraded 为降级（百分数），默认 95 / 80 */
+  health_ok_rate: { sensitive: false },
+  health_degraded_rate: { sensitive: false },
+  /** 本站日志增量拉取的游标状态（JSON）：下次起点、边界秒内已入库的日志 id、分段大小 */
+  log_ingest_state: { sensitive: false },
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFS;

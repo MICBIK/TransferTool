@@ -20,22 +20,41 @@ interface SettingsView {
   adminEmail: string;
   smtp: { host: string; port: number; secure: boolean; user: string; pass: string; passSet: boolean; from: string };
   smtpVerified: boolean;
+  alertRepeatHours: number;
+  autoDisableAtZero: boolean;
+  healthOkRate: number;
+  healthDegradedRate: number;
   emergencyPasswordConfigured: boolean;
   notice?: string;
 }
 
 const message = useMessage();
 
+interface OwnSiteView {
+  url: string;
+  tokenSet: boolean;
+  userIdSet: boolean;
+  configured: boolean;
+  sync?: { ok: boolean; error: string | null; total: number } | null;
+}
+const own = reactive({ url: '', token: '', userId: '', tokenSet: false, userIdSet: false, configured: false });
+const ownBusy = reactive({ save: false, test: false });
+const ownTest = ref<{ ok: boolean; text: string } | null>(null);
+
 const state = reactive({
   loginMethod: 'password' as SettingsView['loginMethod'],
   adminEmail: '',
   smtp: { host: '', port: 465, secure: true, user: '', pass: '', passSet: false, from: '' },
   smtpVerified: false,
+  alertRepeatHours: 6,
+  autoDisableAtZero: false,
+  healthOkRate: 95,
+  healthDegradedRate: 80,
   emergencyPasswordConfigured: false,
 });
 
 const pwd = reactive({ current: '', next: '', confirm: '' });
-const busy = reactive({ password: false, method: false, smtp: false, test: false });
+const busy = reactive({ password: false, method: false, smtp: false, test: false, alerts: false, health: false });
 const loaded = ref(false);
 
 function apply(v: SettingsView) {
@@ -43,6 +62,10 @@ function apply(v: SettingsView) {
   state.adminEmail = v.adminEmail;
   state.smtp = { ...v.smtp, pass: '' };
   state.smtpVerified = v.smtpVerified;
+  state.alertRepeatHours = v.alertRepeatHours;
+  state.autoDisableAtZero = v.autoDisableAtZero;
+  state.healthOkRate = v.healthOkRate;
+  state.healthDegradedRate = v.healthDegradedRate;
   state.emergencyPasswordConfigured = v.emergencyPasswordConfigured;
 }
 
@@ -52,7 +75,73 @@ function errorText(err: unknown): string {
 
 async function load() {
   apply(await api<SettingsView>('/api/settings'));
+  await loadOwn();
   loaded.value = true;
+}
+
+function applyOwn(v: OwnSiteView) {
+  own.url = v.url;
+  own.token = '';
+  own.userId = '';
+  own.tokenSet = v.tokenSet;
+  own.userIdSet = v.userIdSet;
+  own.configured = v.configured;
+}
+
+async function loadOwn() {
+  applyOwn(await api<OwnSiteView>('/api/settings/own-site'));
+}
+
+function ownBody(clearUserId = false) {
+  const body: { url: string; token?: string; userId?: string | null } = { url: own.url.trim() };
+  if (own.token) body.token = own.token;
+  if (clearUserId) body.userId = null;
+  else if (own.userId.trim()) body.userId = own.userId.trim();
+  return body;
+}
+
+async function saveOwn(clearUserId = false) {
+  if (!own.url.trim()) return message.warning('请填写本站地址；要断开本站请点“断开本站”');
+  if (!own.tokenSet && !own.token) return message.warning('请填写本站访问令牌');
+  ownBusy.save = true;
+  try {
+    const v = await api<OwnSiteView>('/api/settings/own-site', { method: 'PUT', body: ownBody(clearUserId) });
+    applyOwn(v);
+    ownTest.value = null;
+    if (v.sync && !v.sync.ok) message.warning(`已保存，但首次同步渠道失败：${v.sync.error ?? ''}`, { duration: 8000 });
+    else message.success(v.sync ? `已保存，已同步 ${v.sync.total} 个渠道` : '已保存');
+  } catch (err) {
+    message.error(errorText(err));
+  } finally {
+    ownBusy.save = false;
+  }
+}
+
+async function testOwn() {
+  ownBusy.test = true;
+  ownTest.value = null;
+  try {
+    const body = ownBody();
+    const r = await api<{ ok: boolean; total: number | null; error: string | null }>('/api/settings/own-site/test', { body });
+    ownTest.value = r.ok ? { ok: true, text: `连接成功${r.total !== null ? `，本站共有 ${r.total} 个渠道` : ''}` } : { ok: false, text: r.error ?? '连接失败' };
+  } catch (err) {
+    ownTest.value = { ok: false, text: errorText(err) };
+  } finally {
+    ownBusy.test = false;
+  }
+}
+
+async function disconnectOwn() {
+  ownBusy.save = true;
+  try {
+    applyOwn(await api<OwnSiteView>('/api/settings/own-site', { method: 'PUT', body: { url: '' } }));
+    ownTest.value = null;
+    message.success('已断开本站（已缓存的渠道数据保留，重新连接后会刷新）');
+  } catch (err) {
+    message.error(errorText(err));
+  } finally {
+    ownBusy.save = false;
+  }
 }
 
 async function changePassword() {
@@ -81,6 +170,35 @@ async function saveMethod() {
     await load();
   } finally {
     busy.method = false;
+  }
+}
+
+async function saveAlerts() {
+  busy.alerts = true;
+  try {
+    const v = await api<SettingsView>('/api/settings', {
+      method: 'PUT',
+      body: { alertRepeatHours: state.alertRepeatHours, autoDisableAtZero: state.autoDisableAtZero },
+    });
+    apply(v);
+    message.success('提醒设置已保存');
+  } catch (err) {
+    message.error(errorText(err));
+  } finally {
+    busy.alerts = false;
+  }
+}
+
+async function saveHealth() {
+  busy.health = true;
+  try {
+    const v = await api<SettingsView>('/api/settings', { method: 'PUT', body: { healthOkRate: state.healthOkRate, healthDegradedRate: state.healthDegradedRate } });
+    apply(v);
+    message.success('健康阈值已保存');
+  } catch (err) {
+    message.error(errorText(err));
+  } finally {
+    busy.health = false;
   }
 }
 
@@ -176,6 +294,60 @@ onMounted(() => void load().catch((err) => message.error(errorText(err))));
           <n-button :loading="busy.test" :disabled="!state.smtp.host || !state.smtp.from || !state.adminEmail" @click="sendTest">保存并发送测试邮件</n-button>
           <span v-if="state.smtpVerified" style="color: var(--n-success-color, #18a058)">已验证</span>
         </n-space>
+      </n-form>
+    </n-card>
+
+    <n-card title="本站（new-api）连接">
+      <n-form label-placement="left" label-width="90">
+        <n-form-item label="本站地址"><n-input v-model:value="own.url" placeholder="https://your-site.example.com" /></n-form-item>
+        <n-form-item label="访问令牌">
+          <n-input v-model:value="own.token" type="password" show-password-on="click" autocomplete="new-password" :placeholder="own.tokenSet ? '已设置，留空表示不修改' : '本站的访问令牌'" />
+        </n-form-item>
+        <n-form-item label="用户 ID">
+          <n-input v-model:value="own.userId" autocomplete="off" :placeholder="own.userIdSet ? '已设置，留空表示不修改' : '可选；旧版本站需要（New-Api-User）'" style="max-width: 280px" />
+          <n-button v-if="own.userIdSet" style="margin-left: 8px" size="small" :disabled="ownBusy.save" @click="saveOwn(true)">清除</n-button>
+        </n-form-item>
+        <n-alert type="info" :show-icon="false" style="margin-bottom: 16px">
+          建议使用带范围的令牌，只授予：渠道读取、渠道操作、log:read。权限不足时，“测试连接”或操作会提示缺少的具体权限。本工具只读取渠道的基本信息，不会请求或保存渠道密钥（key）。
+        </n-alert>
+        <n-space align="center">
+          <n-button type="primary" :loading="ownBusy.save" @click="saveOwn()">保存</n-button>
+          <n-button :loading="ownBusy.test" :disabled="!own.url.trim() || (!own.tokenSet && !own.token)" @click="testOwn">测试连接</n-button>
+          <n-button v-if="own.configured" quaternary type="error" :disabled="ownBusy.save" @click="disconnectOwn">断开本站</n-button>
+        </n-space>
+        <n-alert v-if="ownTest" :type="ownTest.ok ? 'success' : 'error'" :show-icon="false" style="margin-top: 12px">{{ ownTest.text }}</n-alert>
+      </n-form>
+    </n-card>
+
+    <n-card title="余额提醒">
+      <n-form label-placement="left" label-width="120">
+        <n-form-item label="重复提醒间隔">
+          <n-input-number v-model:value="state.alertRepeatHours" :min="1" :max="168" :precision="0" style="width: 140px" />
+          <span style="margin-left: 12px">小时（持续低于阈值时，最多每隔这么久再提醒一次；紧急阈值跌破立即发送，同一状态只发一次）</span>
+        </n-form-item>
+        <n-form-item label="余额归零自动停渠道">
+          <n-switch v-model:value="state.autoDisableAtZero" />
+          <span style="margin-left: 12px; opacity: 0.7">默认关闭。打开后，上游余额（查询成功时）≤ 0 会批量停用该上游当前启用的渠道，并记录哪些是本工具停的；余额回升到 0 以上时只恢复这些渠道。需先配置上方本站连接，所有动作写入审计日志。</span>
+        </n-form-item>
+        <n-alert v-if="!state.smtpVerified" type="info" :show-icon="false" style="margin-bottom: 16px">提醒邮件使用上方的 SMTP 与站长邮箱，请先发送测试邮件验证。</n-alert>
+        <n-button type="primary" :loading="busy.alerts" @click="saveAlerts">保存提醒设置</n-button>
+      </n-form>
+    </n-card>
+
+    <n-card title="渠道健康">
+      <n-form label-placement="left" label-width="120">
+        <n-form-item label="“正常”成功率">
+          <n-input-number v-model:value="state.healthOkRate" :min="2" :max="100" :precision="0" style="width: 140px" />
+          <span style="margin-left: 12px">% 及以上（近 1 小时成功率）</span>
+        </n-form-item>
+        <n-form-item label="“降级”成功率">
+          <n-input-number v-model:value="state.healthDegradedRate" :min="1" :max="99" :precision="0" style="width: 140px" />
+          <span style="margin-left: 12px">% 及以上为降级，低于此值为异常；近 30 分钟有请求却没有一次成功也判为异常；近 1 小时没有请求为空闲</span>
+        </n-form-item>
+        <n-alert type="info" :show-icon="false" style="margin-bottom: 16px">
+          健康数据来自本站的使用日志与错误日志（令牌需要 log:read 权限，本站需开启错误日志记录）。本工具每 5 分钟拉取一次并只保存聚合结果（保留 30 天），不保存原始日志。
+        </n-alert>
+        <n-button type="primary" :loading="busy.health" @click="saveHealth">保存健康阈值</n-button>
       </n-form>
     </n-card>
   </n-space>

@@ -11,6 +11,8 @@ export const router = createRouter({
       component: () => import('./layouts/AppLayout.vue'),
       children: [
         { path: '', name: 'overview', component: () => import('./views/OverviewView.vue') },
+        { path: 'upstreams/new', name: 'upstream-new', component: () => import('./views/UpstreamCreateView.vue') },
+        { path: 'upstreams/:id(\\d+)', name: 'upstream', component: () => import('./views/UpstreamDetailView.vue') },
         { path: 'channels', name: 'channels', component: () => import('./views/ChannelsView.vue') },
         { path: 'settings', name: 'settings', component: () => import('./views/SettingsView.vue') },
       ],

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import type { AppConfig } from '../config.js';
+import { alertRepeatHours } from './alertService.js';
+import { healthThresholds } from './healthService.js';
 import type { AuditService } from './audit.js';
 import { includesCode, LOGIN_METHODS, type LoginMethod, type LoginService } from './login.js';
 import type { SettingKey, SettingsStore } from './settings.js';
@@ -20,6 +22,13 @@ export const settingsPatchSchema = z.strictObject({
       from: z.string().trim().max(254).optional(),
     })
     .optional(),
+  /** 低余额提醒的最短重复间隔（小时） */
+  alertRepeatHours: z.number().int().min(1).max(168).optional(),
+  /** 余额归零自动停渠道（阶段 3 接入实际动作）；此处仅保存开关 */
+  autoDisableAtZero: z.boolean().optional(),
+  /** 渠道健康阈值（百分数）：成功率 ≥ healthOkRate 为正常，≥ healthDegradedRate 为降级，其余为异常 */
+  healthOkRate: z.number().int().min(2).max(100).optional(),
+  healthDegradedRate: z.number().int().min(1).max(99).optional(),
 });
 export type SettingsPatch = z.infer<typeof settingsPatchSchema>;
 
@@ -51,6 +60,10 @@ export class AdminSettingsService {
         from: settings.get('smtp_from') ?? '',
       },
       smtpVerified: settings.get('smtp_verified') === 'true',
+      alertRepeatHours: alertRepeatHours(settings),
+      autoDisableAtZero: settings.get('auto_disable_at_zero') === 'true',
+      healthOkRate: healthThresholds(settings).okRate,
+      healthDegradedRate: healthThresholds(settings).degradedRate,
       emergencyPasswordConfigured: config.emergencyPassword !== undefined,
     };
   }
@@ -86,6 +99,16 @@ export class AdminSettingsService {
         mailConfigChanged = true;
       }
     }
+    if (patch.healthOkRate !== undefined || patch.healthDegradedRate !== undefined) {
+      const cur = healthThresholds(settings);
+      const ok = patch.healthOkRate ?? cur.okRate;
+      const degraded = patch.healthDegradedRate ?? cur.degradedRate;
+      if (degraded >= ok) throw new SettingsValidationError('“降级”成功率阈值必须低于“正常”阈值');
+      if (patch.healthOkRate !== undefined) put('health_ok_rate', String(ok), 'healthOkRate');
+      if (patch.healthDegradedRate !== undefined) put('health_degraded_rate', String(degraded), 'healthDegradedRate');
+    }
+    if (patch.alertRepeatHours !== undefined) put('alert_repeat_hours', String(patch.alertRepeatHours), 'alertRepeatHours');
+    if (patch.autoDisableAtZero !== undefined) put('auto_disable_at_zero', String(patch.autoDisableAtZero), 'autoDisableAtZero');
     if (mailConfigChanged) settings.set('smtp_verified', 'false');
 
     let notice: string | undefined;

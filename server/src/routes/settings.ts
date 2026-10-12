@@ -4,6 +4,7 @@ import { apiError, clientIp, parseBody } from '../http.js';
 import { issueSession } from '../middleware/auth.js';
 import { SettingsValidationError, settingsPatchSchema } from '../services/adminSettings.js';
 import type { Services } from '../services/index.js';
+import { OwnSiteValidationError, ownSitePatchSchema, ownSiteTestSchema } from '../services/ownSite.js';
 import { MailerError } from '../services/mailer.js';
 
 const passwordChangeBody = z.strictObject({
@@ -25,6 +26,34 @@ export function settingsRoutes(s: Services): Hono {
       return c.json({ ...s.adminSettings.view(), notice });
     } catch (err) {
       if (err instanceof SettingsValidationError) return apiError(c, 400, 'settings_invalid', err.message);
+      throw err;
+    }
+  });
+
+  /** 本站 new-api 连接（令牌只返回掩码） */
+  app.get('/own-site', (c) => c.json(s.ownSite.view()));
+
+  app.put('/own-site', async (c) => {
+    const body = await parseBody(c, ownSitePatchSchema);
+    if (!body.ok) return body.response;
+    try {
+      s.ownSite.update(body.data, clientIp(c, s.config.trustProxy));
+    } catch (err) {
+      if (err instanceof OwnSiteValidationError) return apiError(c, 400, 'settings_invalid', err.message);
+      throw err;
+    }
+    // 保存后立刻同步一次，让渠道页马上有数据；失败不影响保存
+    const sync = s.ownSite.view().configured ? await s.channels.sync() : null;
+    return c.json({ ...s.ownSite.view(), sync });
+  });
+
+  app.post('/own-site/test', async (c) => {
+    const body = await parseBody(c, ownSiteTestSchema);
+    if (!body.ok) return body.response;
+    try {
+      return c.json(await s.ownSite.test(body.data));
+    } catch (err) {
+      if (err instanceof OwnSiteValidationError) return apiError(c, 400, 'settings_invalid', err.message);
       throw err;
     }
   });

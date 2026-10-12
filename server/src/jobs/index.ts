@@ -1,2 +1,1 @@
-// 阶段 2 起：进程内调度器与定时任务（余额刷新、渠道同步、日志聚合、清理）。
-export {};
+export { Scheduler, TICK_MS } from './scheduler.js';
