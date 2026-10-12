@@ -7,7 +7,7 @@ import { channelSummary, upstreamSuggestions, type ChannelCount, type UpstreamSu
 import HealthNotices from '../components/HealthNotices.vue';
 import HealthTag from '../components/HealthTag.vue';
 import { getHealth, type HealthOverview, type UpstreamRollup } from '../health';
-import { STATUS_META, TYPE_LABEL, formatAgo, formatEta, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
+import { STATUS_META, TYPE_LABEL, burnText, etaText, formatAgo, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
 const upstreams = ref<Upstream[]>([]);
@@ -153,8 +153,8 @@ onBeforeUnmount(() => clearInterval(timer));
               阈值 {{ usd(u.threshold) }}<template v-if="u.emergencyThreshold !== null">，紧急 {{ usd(u.emergencyThreshold) }}</template>
             </div>
             <div v-if="u.status !== 'unsupported'">
-              消耗速度 {{ u.burnUsdPerDay === null ? '暂无法估算' : `${usd(u.burnUsdPerDay)}/天` }}
-              <span style="margin: 0 4px">·</span>预计可用 {{ u.balanceUsd === null ? '—' : formatEta(u.exhaustAt, now) }}
+              消耗速度 {{ burnText(u, now) }}
+              <span style="margin: 0 4px">·</span>预计可用 {{ etaText(u, now) }}
             </div>
             <div v-if="channelsConfigured">
               接入渠道

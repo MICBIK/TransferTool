@@ -303,6 +303,7 @@ describe('余额提醒（端到端，假 fetch + 假 SMTP）', () => {
     const state = { usd: 20 };
     fakeNewApi(h, state);
     const { upstream } = await json(await request(h, 'POST', '/api/upstreams', NEW, { cookie }));
+    expect(upstream.burnBasis).toBe('collecting'); // 只有一个快照
     for (const usd of [16, 12]) {
       state.usd = usd;
       h.clock.now += 3600_000;
@@ -312,6 +313,7 @@ describe('余额提醒（端到端，假 fetch + 假 SMTP）', () => {
     h.clock.now += 3600_000;
     const r = await json(await request(h, 'POST', `/api/upstreams/${upstream.id}/refresh`, {}, { cookie }));
     expect(r.upstream.burnUsdPerDay).toBeCloseTo(96, 3);
+    expect(r.upstream.burnBasis).toBe('estimated');
     expect(h.sent).toHaveLength(1);
     expect(h.sent[0]!.text).toContain('约 2.0 小时后');
     expect(h.sent[0]!.text).toContain('$96.00/天');

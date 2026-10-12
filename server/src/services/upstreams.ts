@@ -7,7 +7,7 @@ import { alerts, upstreams } from '../db/schema.js';
 import { MASK } from './adminSettings.js';
 import type { AuditService } from './audit.js';
 import type { BalanceStore } from './balanceStore.js';
-import { BURN_WINDOW_MS, estimateBurn } from './burnRate.js';
+import { BURN_WINDOW_MS, estimateBurn, type BurnBasis } from './burnRate.js';
 import type { Clock } from './clock.js';
 import { decrypt, encrypt } from './crypto.js';
 
@@ -121,6 +121,7 @@ export interface UpstreamView {
   consecutiveFailures: number;
   burnUsdPerDay: number | null;
   exhaustAt: number | null;
+  burnBasis: BurnBasis | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -344,7 +345,7 @@ export class UpstreamService {
     else status = alert.state === 'normal' ? 'ok' : alert.state;
 
     const showBalance = success && status !== 'unknown' && status !== 'unsupported';
-    const burn = showBalance ? estimateBurn(store.points(row.id, now - BURN_WINDOW_MS), now) : { usdPerDay: null, exhaustAt: null };
+    const burn = showBalance ? estimateBurn(store.points(row.id, now - BURN_WINDOW_MS), now) : null;
     return {
       id: row.id,
       name: row.name,
@@ -376,8 +377,10 @@ export class UpstreamService {
       lastSuccessAt: success?.ts ?? null,
       lastError: latest && !latest.ok ? latest.error : null,
       consecutiveFailures: row.consecutiveFailures,
-      burnUsdPerDay: burn.usdPerDay,
-      exhaustAt: burn.exhaustAt,
+      burnUsdPerDay: burn?.usdPerDay ?? null,
+      exhaustAt: burn?.exhaustAt ?? null,
+      /** 无法估算时的原因，便于前端给出“还要等多久” */
+      burnBasis: burn?.basis ?? null,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
