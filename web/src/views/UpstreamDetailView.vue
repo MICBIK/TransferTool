@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { NAlert, NButton, NCard, NDescriptions, NDescriptionsItem, NPopconfirm, NRadioButton, NRadioGroup, NSpace, NTag, NText, useMessage } from 'naive-ui';
 import { api, ApiError } from '../api';
@@ -37,6 +37,8 @@ async function load() {
     upstream.value = await getUpstream(id.value);
     missing.value = false;
     await loadHistory();
+    // 从总览“编辑”进来时直接定位到配置
+    if (route.hash === '#config') await nextTick(scrollToConfig);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) missing.value = true;
     else message.error(errorText(err));
@@ -53,6 +55,10 @@ async function onRefresh() {
   } finally {
     refreshing.value = false;
   }
+}
+
+function scrollToConfig() {
+  document.getElementById('config')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 async function onSaved(u: Upstream) {
@@ -92,6 +98,7 @@ onMounted(() => void load());
       <n-space>
         <n-button v-if="upstream.effectiveTopupUrl" type="primary" secondary tag="a" :href="upstream.effectiveTopupUrl" target="_blank" rel="noopener noreferrer">充值</n-button>
         <n-button :loading="refreshing" :disabled="!upstream.enabled" @click="onRefresh">立即刷新</n-button>
+        <n-button @click="scrollToConfig">编辑配置</n-button>
       </n-space>
     </n-space>
 
@@ -109,7 +116,10 @@ onMounted(() => void load());
         <n-descriptions-item label="最后刷新">{{ formatAgo(upstream.lastCheckedAt) }}</n-descriptions-item>
         <n-descriptions-item label="最近一次提醒">{{ upstream.alertLastSentAt ? formatAgo(upstream.alertLastSentAt) : '无' }}<template v-if="upstream.alertLastResult">（{{ upstream.alertLastResult }}）</template></n-descriptions-item>
       </n-descriptions>
-      <n-alert v-if="upstream.lastError" type="error" :show-icon="false" style="margin-top: 12px">{{ upstream.lastError }}</n-alert>
+      <n-alert v-if="upstream.lastError" type="error" :show-icon="false" style="margin-top: 12px">
+        {{ upstream.lastError }}
+        <n-button text type="primary" style="margin-left: 8px" @click="scrollToConfig">去修改配置</n-button>
+      </n-alert>
     </n-card>
 
     <n-card title="余额曲线" size="small">
@@ -127,7 +137,7 @@ onMounted(() => void load());
       <upstream-channels :upstream-id="upstream.id" :upstream-name="upstream.name" />
     </n-card>
 
-    <n-card title="配置" size="small">
+    <n-card id="config" title="配置" size="small">
       <upstream-form :upstream="upstream" @saved="onSaved" />
     </n-card>
 

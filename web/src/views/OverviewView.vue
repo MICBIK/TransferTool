@@ -180,6 +180,7 @@ onBeforeUnmount(() => clearInterval(timer));
             <n-button v-if="u.effectiveTopupUrl" size="small" type="primary" secondary tag="a" :href="u.effectiveTopupUrl" target="_blank" rel="noopener noreferrer">充值</n-button>
             <n-button size="small" :loading="isRefreshing(u.id)" :disabled="!u.enabled" @click="onRefresh(u)">立即刷新</n-button>
             <router-link :to="`/upstreams/${u.id}`" custom v-slot="{ navigate }"><n-button size="small" quaternary @click="navigate">详情</n-button></router-link>
+            <router-link :to="`/upstreams/${u.id}#config`" custom v-slot="{ navigate }"><n-button size="small" quaternary @click="navigate">编辑</n-button></router-link>
           </n-space>
         </n-card>
       </n-grid-item>

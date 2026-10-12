@@ -3,6 +3,7 @@ import type { Adapter, AdapterDeps, AdapterUpstream, BalanceResult, FetchContext
 
 export const DEFAULT_QUOTA_PER_UNIT = 500_000;
 export const QUOTA_PER_UNIT_TTL_MS = 24 * 3600 * 1000;
+export const USER_ID_REQUIRED_MESSAGE = '该站点要求填写用户 ID（New-Api-User），请在上游配置里补上';
 export const LEGACY_RETIRED_MESSAGE = '旧版访问令牌已失效，请到上游重新生成';
 
 const FAIL = (error: string): BalanceResult => ({ ok: false, mode: 'newapi', error });
@@ -57,6 +58,8 @@ export function createNewApiAdapter(deps: AdapterDeps): Adapter {
         const body = asRecord(res.body);
         if (res.status === 401 || res.status === 403) {
           const msg = safeMessage(body?.message, secrets);
+          // 新版 new-api 要求带 New-Api-User 头：没填用户 ID 时直接告诉站长该填什么
+          if (!upstream.userId && /new-api-user/i.test(msg)) return FAIL(USER_ID_REQUIRED_MESSAGE);
           return FAIL(`上游拒绝了凭证（HTTP ${res.status}）${msg ? `：${msg}` : ''}，请检查访问令牌与用户 ID`);
         }
         if (res.status !== 200) {

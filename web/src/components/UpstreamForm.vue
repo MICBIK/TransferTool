@@ -177,7 +177,10 @@ async function save() {
         <n-input v-model:value="form.userId" autocomplete="off" placeholder="New-Api-User，数字" :input-props="{ inputmode: 'numeric' }" :style="{ width: '240px' }" />
         <n-button v-if="upstream?.secrets.userId.set" secondary @click="copy('userId')">复制已存值</n-button>
       </n-space>
-      <template v-if="upstream?.secrets.userId.set" #feedback>已设置，留空表示不修改</template>
+      <template #feedback>
+        <template v-if="upstream?.secrets.userId.set">已设置，留空表示不修改。</template>
+        新版 new-api 必填。个人页不显示 ID 时：登录上游站点，按 F12 打开控制台，输入 <code>JSON.parse(localStorage.user).id</code> 回车即可看到；也可以在「网络」面板里看任意请求的 New-Api-User 请求头。
+      </template>
     </n-form-item>
     <n-form-item label="账号（可选）">
       <n-space :wrap="false">

@@ -79,6 +79,15 @@ describe('new-api 适配器', () => {
     expect(t.calls).toHaveLength(2);
   });
 
+  it('站点要求 New-Api-User 而未填用户 ID：明确提示补填', async () => {
+    const t = setup(() => jsonRes({ success: false, message: 'Unauthorized, New-Api-User header not provided' }, 401));
+    const r = await t.adapters.fetchBalance({ ...base, userId: undefined });
+    expect(r).toMatchObject({ ok: false, error: '该站点要求填写用户 ID（New-Api-User），请在上游配置里补上' });
+    // 已填了用户 ID 仍被拒：保留原始信息
+    const t2 = setup(() => jsonRes({ success: false, message: 'New-Api-User mismatch' }, 401));
+    expect((await t2.adapters.fetchBalance(base)).error).toContain('mismatch');
+  });
+
   it('旧令牌已停用：给出重新生成提示（HTTP 200 或 401 都识别）', async () => {
     const body = { success: false, code: 'ACCESS_TOKEN_LEGACY_RETIRED', message: 'legacy token retired' };
     for (const httpStatus of [200, 401]) {
