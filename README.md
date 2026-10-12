@@ -12,7 +12,7 @@
 
 | 类型 | 需要填写 | 余额来源 |
 | --- | --- | --- |
-| new-api | 站点地址、访问令牌；新版要求 `New-Api-User` 时填上该站登录账号密码，系统会调用一次 `POST /api/user/login` 取得用户 ID 并加密保存（开了两步验证的账号可在“高级”里手动填用户 ID） | `GET /api/user/self`，按 `GET /api/status` 的 `quota_per_unit`（缺省 500000，缓存 24 小时）换算为美元，再乘汇率系数。优先用 `Authorization: Bearer`，被 401/403 拒绝时自动回退旧写法（令牌直接放 `Authorization`） |
+| new-api | 站点地址、访问令牌；新版要求 `New-Api-User` 时填上该站登录账号密码，系统会调用一次 `POST /api/user/login` 取得用户 ID 并加密保存（开了两步验证的账号可在“高级”里手动填用户 ID；二开站点的字母数字 ID 也可以直接填） | `GET /api/user/self`，按 `GET /api/status` 的 `quota_per_unit`（缺省 500000，缓存 24 小时）换算为美元，再乘汇率系数。优先用 `Authorization: Bearer`，被 401/403 拒绝时自动回退旧写法（令牌直接放 `Authorization`） |
 | sub2api | 站点地址、API Key | `GET /v1/usage`：`unrestricted` 为钱包余额；`quota_limited` 为 **Key 限额**（界面会注明“不是钱包余额”）；响应带 `subscription` 字段显示“暂不支持订阅制”，不触发提醒 |
 
 - 站点地址只接受 `http`/`https`，自动去掉尾部斜杠。所有上游请求 10 秒超时，**不会跟随重定向**（避免凭证被带到别的主机；遇到 301/302 请把站点地址改成最终地址）。

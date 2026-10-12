@@ -55,8 +55,10 @@ export function createNewApiAdapter(deps: AdapterDeps): Adapter {
     });
     const body = asRecord(res.body);
     const data = asRecord(body?.data);
-    const id = asNumber(data?.id);
-    if (res.status === 200 && body?.success === true && id !== undefined && id > 0) return { id: String(Math.trunc(id)) };
+    // 原版是数字；二开站点可能返回字符串 ID，原样使用
+    const rawId = data?.id;
+    const id = typeof rawId === 'number' && rawId > 0 ? String(Math.trunc(rawId)) : typeof rawId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(rawId.trim()) ? rawId.trim() : undefined;
+    if (res.status === 200 && body?.success === true && id !== undefined) return { id };
     if (data?.require_2fa === true) return { error: '该站点账号开启了两步验证，无法自动获取用户 ID，请在“高级”里手动填写' };
     const msg = safeMessage(body?.message, secrets);
     return { error: `用登录账号自动获取用户 ID 失败${msg ? `：${msg}` : `（HTTP ${res.status}）`}，请检查账号密码，或在“高级”里手动填写` };

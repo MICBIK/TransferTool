@@ -195,12 +195,12 @@ async function save() {
     <n-collapse v-if="form.type === 'newapi'" style="margin: 4px 0 18px 110px; max-width: 610px">
       <n-collapse-item title="高级：手动指定用户 ID" name="userId">
         <n-space :wrap="false" align="center">
-          <n-input v-model:value="form.userId" autocomplete="off" placeholder="纯数字，留空则自动获取" :input-props="{ inputmode: 'numeric' }" :style="{ width: '240px' }" />
+          <n-input v-model:value="form.userId" autocomplete="off" placeholder="留空则自动获取" :style="{ width: '240px' }" />
           <n-button v-if="upstream?.secrets.userId.set" secondary @click="copy('userId')">复制已存值</n-button>
         </n-space>
         <n-text depth="3" style="font-size: 12px; display: block; margin-top: 6px">
           <template v-if="upstream?.secrets.userId.set">已设置，留空表示不修改。</template>
-          一般不用填。只有不方便填账号密码（比如开了两步验证）时才需要：登录上游站点后按 F12，在控制台输入 <code>JSON.parse(localStorage.user).id</code>。个人页上显示的字母编码不是它。
+          一般不用填。只有不方便填账号密码（比如开了两步验证）时才需要：登录上游站点后按 F12，在控制台输入 <code>JSON.parse(localStorage.user).id</code>，或直接填个人页上显示的 ID（有的站是字母数字编码，照填即可）。
         </n-text>
       </n-collapse-item>
     </n-collapse>

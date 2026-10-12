@@ -104,6 +104,14 @@ describe('new-api 适配器', () => {
     const t2 = setup((c) => (c.url.endsWith('/api/user/login') ? jsonRes({ success: true, data: { require_2fa: true } }) : needId()));
     expect((await t2.adapters.fetchBalance({ ...noId, account: 'me', password: 'pw' })).error).toContain('两步验证');
 
+    // 二开站点：登录返回字符串 ID，原样放进 New-Api-User
+    const t4 = setup((c) => {
+      if (c.url.endsWith('/api/status')) return status(500_000);
+      if (c.url.endsWith('/api/user/login')) return jsonRes({ success: true, data: { id: '9B9YQ5' } });
+      return c.headers['new-api-user'] === '9B9YQ5' ? okSelf(500_000) : needId();
+    });
+    expect(await t4.adapters.fetchBalance({ ...noId, account: 'me', password: 'pw' })).toMatchObject({ ok: true, balanceUsd: 1, discoveredUserId: '9B9YQ5' });
+
     // 已填了用户 ID 仍被拒：不登录，保留原始信息
     const t3 = setup(() => jsonRes({ success: false, message: 'New-Api-User mismatch' }, 401));
     expect((await t3.adapters.fetchBalance({ ...base, account: 'me', password: 'pw' })).error).toContain('mismatch');

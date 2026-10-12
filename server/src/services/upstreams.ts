@@ -37,7 +37,8 @@ const shape = {
   rateFactor: z.number().finite().gt(0).max(1000),
   enabled: z.boolean(),
   note: z.string().max(500),
-  userId: z.string().trim().regex(/^\d{1,12}$/, '用户 ID 是纯数字（个人页上的字母编码不是它），留空即可，系统会用登录账号自动获取').or(z.literal('')),
+  /** 原版 new-api 是数字，二开站点可能是字母数字编码（如 9B9YQ5），原样放进 New-Api-User 头 */
+  userId: z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/, '用户 ID 只能包含字母、数字、- 和 _；留空即可，系统会用登录账号自动获取').or(z.literal('')),
   account: z.string().max(256),
   password: z.string().max(512),
 };

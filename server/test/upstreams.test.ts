@@ -113,6 +113,14 @@ describe('上游接口', () => {
     expect(logins).toBe(1);
   });
 
+  it('手动填写的用户 ID 接受二开站点的字母数字编码，拒绝其他字符', async () => {
+    const { h, cookie } = await setup();
+    fakeNewApi(h, { usd: 1 });
+    expect((await request(h, 'POST', '/api/upstreams', { ...NEW, userId: '9B9YQ5' }, { cookie })).status).toBe(201);
+    expect(h.upstream.calls.find((c) => c.url.endsWith('/api/user/self'))?.headers['new-api-user']).toBe('9B9YQ5');
+    expect((await request(h, 'POST', '/api/upstreams', { ...NEW, userId: 'a b\n' }, { cookie })).status).toBe(400);
+  });
+
   it('复制接口：解密下发并写 audit_log（不含明文）；未设置的字段 404', async () => {
     const { h, cookie } = await setup();
     fakeNewApi(h, { usd: 50 });
