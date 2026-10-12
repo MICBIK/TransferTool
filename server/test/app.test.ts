@@ -280,6 +280,42 @@ describe('登录方式与 SMTP', () => {
     expect(text).not.toContain('secret-detail');
   });
 
+  it('测试邮件连不上时给出具体原因，并检测哪些端口能连通', async () => {
+    const h = await makeHarness();
+    const cookie = await login(h);
+    await request(h, 'PUT', '/api/settings', SMTP_BODY, { cookie });
+    const fail = async (error: Error) => {
+      h.failSend.value = true;
+      h.failSend.error = error;
+      h.probed.length = 0;
+      const res = await post(h, '/api/settings/smtp/test', {}, { cookie });
+      expect(res.status).toBe(400);
+      return ((await res.json()) as { error: { message: string } }).error.message;
+    };
+    // nodemailer 把底层的 ECONNREFUSED 包装成 ESOCKET，原码放在 originalCode
+    const refused = Object.assign(new Error('connect ECONNREFUSED 1.2.3.4:465 secret-detail'), { code: 'ESOCKET', originalCode: 'ECONNREFUSED' });
+    let msg = await fail(refused);
+    expect(msg).toContain('连接被拒绝');
+    expect(msg).toContain('ESOCKET / ECONNREFUSED');
+    expect(msg).toContain('全部不通');
+    expect(msg).not.toContain('secret-detail');
+    expect(h.probed).toEqual([465, 587]);
+
+    h.openPorts.add(587);
+    msg = await fail(refused);
+    expect(msg).toContain('建议改用 587 端口（SSL 关闭）');
+
+    h.openPorts.add(465);
+    msg = await fail(Object.assign(new Error('wrong version number'), { code: 'ESOCKET' }));
+    expect(msg).toContain('SSL/TLS 握手失败');
+    expect(msg).toContain('问题更可能在 SSL 开关');
+
+    // 认证失败是服务器明确的回复，不需要探测端口
+    msg = await fail(Object.assign(new Error('Invalid login: 535 Authentication failed'), { code: 'EAUTH', responseCode: 535 }));
+    expect(msg).toContain('用户名或密码被拒绝');
+    expect(h.probed).toEqual([]);
+  });
+
   it('填了 SMTP 主机却没有发件人时拒绝保存', async () => {
     const h = await makeHarness();
     const cookie = await login(h);

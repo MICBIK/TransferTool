@@ -11,7 +11,10 @@ export interface Harness {
   app: ReturnType<typeof createApp>;
   sent: MailMessage[];
   smtpConfigs: SmtpConfig[];
-  failSend: { value: boolean };
+  failSend: { value: boolean; error?: Error };
+  /** 假端口探测：列出的端口视为可连通 */
+  openPorts: Set<number>;
+  probed: number[];
   clock: { now: number };
   db: ReturnType<typeof openDatabase>['db'];
   /** 上游请求的假 fetch：改 upstream.handler 即可切换响应；calls 记录全部请求 */
@@ -42,10 +45,12 @@ export async function makeHarness(configOverrides: Partial<AppConfig> = {}): Pro
   const clock = { now: 1_700_000_000_000 };
   const sent: MailMessage[] = [];
   const smtpConfigs: SmtpConfig[] = [];
-  const failSend = { value: false };
+  const failSend: { value: boolean; error?: Error } = { value: false };
+  const openPorts = new Set<number>();
+  const probed: number[] = [];
   const transport: MailTransport = {
     async sendMail(message) {
-      if (failSend.value) throw Object.assign(new Error('boom secret-detail'), { code: 'ECONNREFUSED' });
+      if (failSend.value) throw failSend.error ?? Object.assign(new Error('boom secret-detail'), { code: 'ECONNREFUSED' });
       sent.push(message);
     },
   };
@@ -61,9 +66,13 @@ export async function makeHarness(configOverrides: Partial<AppConfig> = {}): Pro
       smtpConfigs.push(smtp);
       return transport;
     },
+    portProbe: async (_host, port) => {
+      probed.push(port);
+      return openPorts.has(port);
+    },
   });
   await s.authState.initialize(config.adminPassword);
-  return { s, app: createApp(s), sent, smtpConfigs, failSend, clock, db, upstream };
+  return { s, app: createApp(s), sent, smtpConfigs, failSend, openPorts, probed, clock, db, upstream };
 }
 
 export function post(h: Harness, path: string, body: unknown, opts: { cookie?: string; ip?: string } = {}) {
