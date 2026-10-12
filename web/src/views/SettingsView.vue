@@ -20,6 +20,8 @@ interface SettingsView {
   adminEmail: string;
   smtp: { host: string; port: number; secure: boolean; user: string; pass: string; passSet: boolean; from: string };
   smtpVerified: boolean;
+  alertRepeatHours: number;
+  autoDisableAtZero: boolean;
   emergencyPasswordConfigured: boolean;
   notice?: string;
 }
@@ -31,11 +33,13 @@ const state = reactive({
   adminEmail: '',
   smtp: { host: '', port: 465, secure: true, user: '', pass: '', passSet: false, from: '' },
   smtpVerified: false,
+  alertRepeatHours: 6,
+  autoDisableAtZero: false,
   emergencyPasswordConfigured: false,
 });
 
 const pwd = reactive({ current: '', next: '', confirm: '' });
-const busy = reactive({ password: false, method: false, smtp: false, test: false });
+const busy = reactive({ password: false, method: false, smtp: false, test: false, alerts: false });
 const loaded = ref(false);
 
 function apply(v: SettingsView) {
@@ -43,6 +47,8 @@ function apply(v: SettingsView) {
   state.adminEmail = v.adminEmail;
   state.smtp = { ...v.smtp, pass: '' };
   state.smtpVerified = v.smtpVerified;
+  state.alertRepeatHours = v.alertRepeatHours;
+  state.autoDisableAtZero = v.autoDisableAtZero;
   state.emergencyPasswordConfigured = v.emergencyPasswordConfigured;
 }
 
@@ -81,6 +87,22 @@ async function saveMethod() {
     await load();
   } finally {
     busy.method = false;
+  }
+}
+
+async function saveAlerts() {
+  busy.alerts = true;
+  try {
+    const v = await api<SettingsView>('/api/settings', {
+      method: 'PUT',
+      body: { alertRepeatHours: state.alertRepeatHours, autoDisableAtZero: state.autoDisableAtZero },
+    });
+    apply(v);
+    message.success('提醒设置已保存');
+  } catch (err) {
+    message.error(errorText(err));
+  } finally {
+    busy.alerts = false;
   }
 }
 
@@ -176,6 +198,21 @@ onMounted(() => void load().catch((err) => message.error(errorText(err))));
           <n-button :loading="busy.test" :disabled="!state.smtp.host || !state.smtp.from || !state.adminEmail" @click="sendTest">保存并发送测试邮件</n-button>
           <span v-if="state.smtpVerified" style="color: var(--n-success-color, #18a058)">已验证</span>
         </n-space>
+      </n-form>
+    </n-card>
+
+    <n-card title="余额提醒">
+      <n-form label-placement="left" label-width="120">
+        <n-form-item label="重复提醒间隔">
+          <n-input-number v-model:value="state.alertRepeatHours" :min="1" :max="168" :precision="0" style="width: 140px" />
+          <span style="margin-left: 12px">小时（持续低于阈值时，最多每隔这么久再提醒一次；紧急阈值跌破立即发送，同一状态只发一次）</span>
+        </n-form-item>
+        <n-form-item label="余额归零自动停渠道">
+          <n-switch v-model:value="state.autoDisableAtZero" />
+          <span style="margin-left: 12px; opacity: 0.7">默认关闭。当前版本只保存此开关，实际停用渠道的动作将在接入本站渠道后生效。</span>
+        </n-form-item>
+        <n-alert v-if="!state.smtpVerified" type="info" :show-icon="false" style="margin-bottom: 16px">提醒邮件使用上方的 SMTP 与站长邮箱，请先发送测试邮件验证。</n-alert>
+        <n-button type="primary" :loading="busy.alerts" @click="saveAlerts">保存提醒设置</n-button>
       </n-form>
     </n-card>
   </n-space>

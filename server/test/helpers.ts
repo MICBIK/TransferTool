@@ -3,6 +3,7 @@ import { createApp } from '../src/app.js';
 import type { AppConfig } from '../src/config.js';
 import { openDatabase } from '../src/db/client.js';
 import { buildServices, type Services } from '../src/services/index.js';
+import { fakeFetch, jsonRes, type Handler, type RecordedCall } from './fakeFetch.js';
 import type { MailMessage, MailTransport, SmtpConfig } from '../src/services/mailer.js';
 
 export interface Harness {
@@ -13,6 +14,8 @@ export interface Harness {
   failSend: { value: boolean };
   clock: { now: number };
   db: ReturnType<typeof openDatabase>['db'];
+  /** 上游请求的假 fetch：改 upstream.handler 即可切换响应；calls 记录全部请求 */
+  upstream: { handler: Handler; calls: RecordedCall[] };
 }
 
 export const ADMIN_PASSWORD = 'correct horse battery';
@@ -47,7 +50,11 @@ export async function makeHarness(configOverrides: Partial<AppConfig> = {}): Pro
     },
   };
   const config = testConfig(configOverrides);
+  const upstream = { handler: (() => jsonRes({ success: false, message: 'unset' }, 500)) as Handler, calls: [] as RecordedCall[] };
+  const ff = fakeFetch((c) => upstream.handler(c));
+  upstream.calls = ff.calls;
   const s = buildServices(config, db, {
+    fetch: ff.fetch,
     clock: () => clock.now,
     hashIterations: 1000,
     transportFactory: (smtp) => {
@@ -56,7 +63,7 @@ export async function makeHarness(configOverrides: Partial<AppConfig> = {}): Pro
     },
   });
   await s.authState.initialize(config.adminPassword);
-  return { s, app: createApp(s), sent, smtpConfigs, failSend, clock, db };
+  return { s, app: createApp(s), sent, smtpConfigs, failSend, clock, db, upstream };
 }
 
 export function post(h: Harness, path: string, body: unknown, opts: { cookie?: string; ip?: string } = {}) {
@@ -109,4 +116,10 @@ export function lastCode(h: Harness): string {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function json(res: Response): Promise<any> {
   return res.json();
+}
+
+/** 配置并验证 SMTP（假传输），使提醒邮件可以“发出”。 */
+export async function configureMail(h: Harness, cookie: string): Promise<void> {
+  expectOk(await request(h, 'PUT', '/api/settings', SMTP_BODY, { cookie }));
+  h.sent.length = 0;
 }
