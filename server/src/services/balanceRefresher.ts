@@ -83,7 +83,8 @@ export class BalanceRefresher {
 
   private dueRows(opts: RefreshOptions): UpstreamRow[] {
     const now = this.deps.clock();
-    let rows = this.deps.upstreams.list().filter((r) => r.enabled);
+    // 自动创建、还没填凭证的上游不刷新
+    let rows = this.deps.upstreams.list().filter((r) => r.enabled && !r.needsSetup);
     if (opts.ids) rows = rows.filter((r) => opts.ids!.includes(r.id));
     if (!opts.force && !opts.ids) {
       rows = rows.filter((r) => r.lastCheckedAt === null || now - r.lastCheckedAt >= r.intervalMinutes * 60_000 - DUE_SLACK_MS);
@@ -142,6 +143,7 @@ export class BalanceRefresher {
     const current = this.deps.upstreams.find(row.id);
     if (!current) return null;
     this.deps.store.insertSnapshot(row.id, now, result);
+    if (result.discoveredUserId) this.deps.upstreams.saveDiscoveredUserId(row.id, result.discoveredUserId);
     const failures = result.ok || result.unsupported ? 0 : current.consecutiveFailures + 1;
     return this.deps.db.update(upstreams).set({ lastCheckedAt: now, consecutiveFailures: failures }).where(eq(upstreams.id, row.id)).returning().get() ?? null;
   }

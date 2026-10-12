@@ -61,9 +61,11 @@ const TABS: Tab[] = ['overview', 'channels', 'config'];
 const tab = computed<Tab>({
   get: () => {
     const h = route.hash.slice(1) as Tab;
-    return TABS.includes(h) ? h : 'overview';
+    if (TABS.includes(h)) return h;
+    // 自动创建、待填密钥的上游默认打开配置页签
+    return upstream.value?.needsSetup ? 'config' : 'overview';
   },
-  set: (t) => void router.replace({ hash: t === 'overview' ? '' : `#${t}` }),
+  set: (t) => void router.replace({ hash: `#${t}` }),
 });
 function openConfig() {
   tab.value = 'config';
@@ -105,7 +107,7 @@ onMounted(() => void load());
       </n-space>
       <n-space>
         <n-button v-if="upstream.effectiveTopupUrl" type="primary" secondary tag="a" :href="upstream.effectiveTopupUrl" target="_blank" rel="noopener noreferrer">充值</n-button>
-        <n-button :loading="refreshing" :disabled="!upstream.enabled" @click="onRefresh">立即刷新</n-button>
+        <n-button :loading="refreshing" :disabled="!upstream.enabled || upstream.needsSetup" @click="onRefresh">立即刷新</n-button>
       </n-space>
     </n-space>
 

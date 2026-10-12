@@ -32,6 +32,8 @@ export interface SyncResult {
   total: number;
   added: number;
   removed: number;
+  /** 根据未归类渠道自动创建的“待配置”上游数 */
+  autoCreated: number;
 }
 
 export interface StatusResult {
@@ -52,17 +54,6 @@ export interface ChannelCount {
   total: number;
 }
 
-/** 未归类渠道按主域名分组得到的“可添加上游”建议 */
-export interface UpstreamSuggestion {
-  domain: string;
-  siteUrl: string;
-  hosts: string[];
-  channelCount: number;
-  enabledCount: number;
-  sampleNames: string[];
-}
-
-export const upstreamSuggestions = () => api<{ configured: boolean; suggestions: UpstreamSuggestion[] }>('/api/channels/upstream-suggestions');
 export const listChannels = () => api<ChannelListing>('/api/channels');
 export const channelSummary = () => api<{ configured: boolean; summary: ChannelCount[] }>('/api/channels/summary');
 export const syncChannels = () => api<ChannelListing & { result: SyncResult }>('/api/channels/sync', { body: {} });

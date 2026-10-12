@@ -32,6 +32,8 @@ export const SETTING_DEFS = {
   health_degraded_rate: { sensitive: false },
   /** 本站日志增量拉取的游标状态（JSON）：下次起点、边界秒内已入库的日志 id、分段大小 */
   log_ingest_state: { sensitive: false },
+  /** 不再自动创建上游的主域名（JSON 数组）：站长删除过的自动上游记在这里，避免下次同步又建回来 */
+  ignored_upstream_domains: { sensitive: false },
 } as const;
 
 export type SettingKey = keyof typeof SETTING_DEFS;

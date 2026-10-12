@@ -1,9 +1,9 @@
-import { asNumber, asRecord, getJson, safeMessage, UpstreamRequestError, type JsonResponse } from './http.js';
+import { asNumber, asRecord, getJson, requestJson, safeMessage, UpstreamRequestError, type JsonResponse } from './http.js';
 import type { Adapter, AdapterDeps, AdapterUpstream, BalanceResult, FetchContext } from './types.js';
 
 export const DEFAULT_QUOTA_PER_UNIT = 500_000;
 export const QUOTA_PER_UNIT_TTL_MS = 24 * 3600 * 1000;
-export const USER_ID_REQUIRED_MESSAGE = '该站点要求填写用户 ID（New-Api-User），请在上游配置里补上';
+export const USER_ID_REQUIRED_MESSAGE = '该站点需要用户 ID：在上游配置里填写该站的登录账号和密码，即可自动获取';
 export const LEGACY_RETIRED_MESSAGE = '旧版访问令牌已失效，请到上游重新生成';
 
 const FAIL = (error: string): BalanceResult => ({ ok: false, mode: 'newapi', error });
@@ -42,25 +42,57 @@ export function createNewApiAdapter(deps: AdapterDeps): Adapter {
     return h;
   }
 
+  /**
+   * 用登录账号密码换取用户 ID（new-api 的 /api/user/login 在 data.id 里返回）。
+   * 只发往该上游自己的站点；失败时返回给站长看的原因。
+   */
+  async function loginForUserId(upstream: AdapterUpstream, ctx: FetchContext | undefined, secrets: string[]): Promise<{ id: string } | { error: string }> {
+    const res = await requestJson(deps.fetch, `${upstream.siteUrl}/api/user/login`, {
+      method: 'POST',
+      body: { username: upstream.account, password: upstream.password },
+      timeoutMs: deps.timeoutMs,
+      signal: ctx?.signal,
+    });
+    const body = asRecord(res.body);
+    const data = asRecord(body?.data);
+    const id = asNumber(data?.id);
+    if (res.status === 200 && body?.success === true && id !== undefined && id > 0) return { id: String(Math.trunc(id)) };
+    if (data?.require_2fa === true) return { error: '该站点账号开启了两步验证，无法自动获取用户 ID，请在“高级”里手动填写' };
+    const msg = safeMessage(body?.message, secrets);
+    return { error: `用登录账号自动获取用户 ID 失败${msg ? `：${msg}` : `（HTTP ${res.status}）`}，请检查账号密码，或在“高级”里手动填写` };
+  }
+
+  async function querySelf(upstream: AdapterUpstream, ctx: FetchContext | undefined): Promise<JsonResponse> {
+    const url = `${upstream.siteUrl}/api/user/self`;
+    const opts = { timeoutMs: deps.timeoutMs, signal: ctx?.signal };
+    const res = await getJson(deps.fetch, url, { ...opts, headers: headers(upstream, `Bearer ${upstream.credential}`) });
+    if (res.status !== 401 && res.status !== 403) return res;
+    // 旧版 new-api：Authorization 直接放令牌（不带 Bearer）
+    return getJson(deps.fetch, url, { ...opts, headers: headers(upstream, upstream.credential) });
+  }
+
   return {
     async fetchBalance(upstream, ctx) {
-      const url = `${upstream.siteUrl}/api/user/self`;
-      const secrets = [upstream.credential];
-      const opts = { timeoutMs: deps.timeoutMs, signal: ctx?.signal };
+      const secrets = [upstream.credential, upstream.password ?? ''].filter(Boolean);
       try {
-        let res = await getJson(deps.fetch, url, { ...opts, headers: headers(upstream, `Bearer ${upstream.credential}`) });
-        if (res.status === 401 || res.status === 403) {
-          // 旧版 new-api：Authorization 直接放令牌（不带 Bearer）
-          res = await getJson(deps.fetch, url, { ...opts, headers: headers(upstream, upstream.credential) });
+        let res = await querySelf(upstream, ctx);
+        let discoveredUserId: string | undefined;
+
+        // 新版 new-api 要求 New-Api-User 头：没填用户 ID 时用登录账号密码自动获取一次
+        const needsUserId = (r: JsonResponse) => (r.status === 401 || r.status === 403) && /new-api-user/i.test(safeMessage(asRecord(r.body)?.message, secrets));
+        if (!upstream.userId && needsUserId(res)) {
+          if (!upstream.account || !upstream.password) return FAIL(USER_ID_REQUIRED_MESSAGE);
+          const login = await loginForUserId(upstream, ctx, secrets);
+          if ('error' in login) return FAIL(login.error);
+          discoveredUserId = login.id;
+          res = await querySelf({ ...upstream, userId: login.id }, ctx);
         }
 
         if (isLegacyRetired(res)) return FAIL(LEGACY_RETIRED_MESSAGE);
         const body = asRecord(res.body);
         if (res.status === 401 || res.status === 403) {
           const msg = safeMessage(body?.message, secrets);
-          // 新版 new-api 要求带 New-Api-User 头：没填用户 ID 时直接告诉站长该填什么
-          if (!upstream.userId && /new-api-user/i.test(msg)) return FAIL(USER_ID_REQUIRED_MESSAGE);
-          return FAIL(`上游拒绝了凭证（HTTP ${res.status}）${msg ? `：${msg}` : ''}，请检查访问令牌与用户 ID`);
+          return FAIL(`上游拒绝了凭证（HTTP ${res.status}）${msg ? `：${msg}` : ''}，请检查访问令牌${upstream.userId ? '与用户 ID' : ''}`);
         }
         if (res.status !== 200) {
           const msg = safeMessage(body?.message, secrets);
@@ -81,7 +113,7 @@ export function createNewApiAdapter(deps: AdapterDeps): Adapter {
         const raw: Record<string, unknown> = { quota, quota_per_unit: perUnit };
         const used = asNumber(data.used_quota);
         if (used !== undefined) raw.used_quota = used;
-        return { ok: true, balanceUsd, mode: 'newapi', kind: 'wallet', raw };
+        return { ok: true, balanceUsd, mode: 'newapi', kind: 'wallet', raw, ...(discoveredUserId ? { discoveredUserId } : {}) };
       } catch (err) {
         if (err instanceof UpstreamRequestError) return FAIL(err.message);
         throw err;

@@ -2,7 +2,7 @@ import { api } from './api';
 
 export type UpstreamType = 'newapi' | 'sub2api';
 export type SecretField = 'credential' | 'userId' | 'account' | 'password';
-export type UpstreamStatus = 'ok' | 'low' | 'critical' | 'unknown' | 'unsupported' | 'pending' | 'disabled';
+export type UpstreamStatus = 'ok' | 'low' | 'critical' | 'unknown' | 'unsupported' | 'pending' | 'disabled' | 'setup';
 
 export interface Upstream {
   id: number;
@@ -34,6 +34,8 @@ export interface Upstream {
   exhaustAt: number | null;
   /** estimated：已估算；collecting：数据还不够；no_usage：观察期内没有消耗；null：没有可用余额 */
   burnBasis: 'estimated' | 'collecting' | 'no_usage' | null;
+  /** 根据本站渠道自动创建、还没填凭证 */
+  needsSetup: boolean;
 }
 
 export interface TestResult {
@@ -59,7 +61,7 @@ export const getHistory = (id: number, days: number) =>
 export const copySecret = (id: number, field: SecretField) =>
   api<{ value: string }>(`/api/upstreams/${id}/secrets/${field}/copy`, { body: {} }).then((r) => r.value);
 
-const STATUS_ORDER: Record<UpstreamStatus, number> = { critical: 0, low: 1, unknown: 2, unsupported: 3, ok: 4, pending: 5, disabled: 6 };
+const STATUS_ORDER: Record<UpstreamStatus, number> = { setup: 0, critical: 1, low: 2, unknown: 3, unsupported: 4, ok: 5, pending: 6, disabled: 7 };
 /** 低于阈值/异常排前 */
 export function sortUpstreams(list: Upstream[]): Upstream[] {
   return [...list].sort((a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || a.name.localeCompare(b.name, 'zh-CN'));
@@ -73,6 +75,7 @@ export const STATUS_META: Record<UpstreamStatus, { label: string; tag: 'success'
   unsupported: { label: '暂不支持订阅制', tag: 'info', color: '#909399' },
   pending: { label: '等待首次刷新', tag: 'default', color: '#909399' },
   disabled: { label: '已停用', tag: 'default', color: '#909399' },
+  setup: { label: '待配置', tag: 'info', color: '#2080f0' },
 };
 
 export const TYPE_LABEL: Record<UpstreamType, string> = { newapi: 'new-api', sub2api: 'sub2api' };

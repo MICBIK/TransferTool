@@ -74,6 +74,8 @@ export const upstreams = sqliteTable('upstreams', {
   userIdEnc: text('user_id_enc'),
   accountEnc: text('account_enc'),
   passwordEnc: text('password_enc'),
+  /** 根据本站渠道自动创建、还没填凭证的上游：不刷新、不提醒，等站长确认类型并填入密钥 */
+  needsSetup: integer('needs_setup', { mode: 'boolean' }).notNull().default(false),
   /** 调度状态：最近一次尝试时间与连续失败次数（>=3 视为“余额未知”） */
   lastCheckedAt: integer('last_checked_at'),
   consecutiveFailures: integer('consecutive_failures').notNull().default(0),

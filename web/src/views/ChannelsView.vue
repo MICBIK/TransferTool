@@ -102,7 +102,10 @@ async function onSync() {
     const r = await syncChannels();
     apply(r);
     upstreams.value = await listUpstreams();
-    if (r.result.ok) message.success(`已同步 ${r.result.total} 个渠道${r.result.removed ? `，移除 ${r.result.removed} 个已在本站删除的渠道` : ''}`);
+    if (r.result.ok)
+      message.success(
+        `已同步 ${r.result.total} 个渠道${r.result.removed ? `，移除 ${r.result.removed} 个已在本站删除的渠道` : ''}${r.result.autoCreated ? `，自动创建 ${r.result.autoCreated} 个待配置上游，请到总览填入密钥` : ''}`,
+      );
     else message.error(r.result.error ?? '同步失败');
   } catch (err) {
     message.error(errorText(err));

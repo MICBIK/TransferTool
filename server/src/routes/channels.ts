@@ -33,9 +33,6 @@ export function channelRoutes(s: Services): Hono {
   /** 每个上游的启用/总数（总览卡片用）；upstreamId 为 null 的是未归类渠道 */
   app.get('/summary', (c) => c.json({ configured: s.channels.configured, summary: s.channels.summary() }));
 
-  /** 未归类渠道按主域名分组，作为“添加上游”的建议 */
-  app.get('/upstream-suggestions', (c) => c.json({ configured: s.channels.configured, suggestions: s.channels.upstreamSuggestions() }));
-
   app.post('/sync', async (c) => {
     const result = await s.channels.sync();
     return c.json({ result, ...listing() });

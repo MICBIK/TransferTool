@@ -76,7 +76,7 @@ export function buildServices(config: AppConfig, db: Db, overrides: ServiceOverr
   const upstreams = new UpstreamService({ config, db, store, audit, clock, adapters });
   const alerts = new AlertService({ store, mailer, settings, clock });
   const ownSite = new OwnSiteService({ settings, audit, client: ownSiteClient });
-  const channels = new ChannelService({ db, ownSite, client: ownSiteClient, upstreams, audit, clock });
+  const channels = new ChannelService({ db, ownSite, client: ownSiteClient, upstreams, audit, clock, settings, detectType: (siteUrl, signal) => adapters.detectType(siteUrl, { signal }) });
   const automation = new ChannelAutomation({ channels, settings, audit });
   const channelStats = new ChannelStatsStore(db);
   const logIngestor = new LogIngestor({ settings, ownSite, client: ownSiteClient, stats: channelStats, clock, ...overrides.logIngest });

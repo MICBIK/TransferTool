@@ -86,9 +86,31 @@ describe('上游接口', () => {
     expect(copied.value).toBe('new-pw');
 
     expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { siteUrl: 'https://other.example.org' }, { cookie })).status).toBe(400);
-    expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { siteUrl: 'https://other.example.org', credential: 'new-token' }, { cookie })).status).toBe(200);
+    // 登录密码会用于自动获取用户 ID，换主机时同样必须重填
+    expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { siteUrl: 'https://other.example.org', credential: 'new-token' }, { cookie })).status).toBe(400);
+    expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { siteUrl: 'https://other.example.org', credential: 'new-token', password: 'pw2' }, { cookie })).status).toBe(200);
     expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { threshold: 1 }, { cookie })).status).toBe(400); // 紧急阈值 2 ≥ 1
     expect((await request(h, 'PUT', '/api/upstreams/999', { name: 'x' }, { cookie })).status).toBe(404);
+  });
+
+  it('没填用户 ID 而站点要求时：用账号密码登录获取一次并加密保存，之后直接使用', async () => {
+    const { h, cookie } = await setup();
+    let logins = 0;
+    h.upstream.handler = (c) => {
+      if (c.url.endsWith('/api/status')) return jsonRes({ success: true, data: { quota_per_unit: 500000 } });
+      if (c.url.endsWith('/api/user/login')) {
+        logins++;
+        return jsonRes({ success: true, data: { id: 31 } });
+      }
+      return c.headers['new-api-user'] === '31' ? jsonRes({ success: true, data: { quota: 2_500_000 } }) : jsonRes({ success: false, message: 'New-Api-User header not provided' }, 401);
+    };
+    const res = await json(await request(h, 'POST', '/api/upstreams', { ...NEW, userId: '' }, { cookie }));
+    expect(res.upstream).toMatchObject({ status: 'ok', balanceUsd: 5 });
+    expect(res.upstream.secrets.userId.set).toBe(true);
+    const row = h.db.select().from(upstreams).get()!;
+    expect(row.userIdEnc).toMatch(/^enc:v1:/);
+    await request(h, 'POST', `/api/upstreams/${res.upstream.id}/refresh`, {}, { cookie });
+    expect(logins).toBe(1);
   });
 
   it('复制接口：解密下发并写 audit_log（不含明文）；未设置的字段 404', async () => {

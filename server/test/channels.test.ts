@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { auditLog, channels, settings } from '../src/db/schema.js';
 import { jsonRes } from './fakeFetch.js';
 import { fakeOwnSite, OWN, OWN_TOKEN, type FakeChannel } from './fakeOwnSite.js';
-import { json, login, makeHarness, request, type Harness } from './helpers.js';
+import { json, login, makeHarness, post, request, type Harness } from './helpers.js';
 
 const ch = (id: number, base_url: string, over: Partial<FakeChannel> = {}): FakeChannel => ({ id, name: `渠道${id}`, base_url, group: 'default', status: 1, key: `sk-SECRET-${id}`, ...over });
 
@@ -107,46 +107,67 @@ describe('渠道同步与归类', () => {
 
     const list = await json(await request(h, 'GET', '/api/channels', undefined, { cookie }));
     const by = Object.fromEntries(list.channels.map((c: { id: number; upstreamId: number | null }) => [c.id, c.upstreamId]));
-    expect(by).toEqual({ 1: a.id, 2: a.id, 3: b.id, 4: null, 5: null, 6: null });
+    // 5 与已有上游同主域名（example.com），不自动建；6 的 other.io 自动建了一个待配置上游
+    const auto = h.s.upstreams.list().find((u) => u.needsSetup)!;
+    expect(auto).toMatchObject({ siteUrl: 'https://other.io', credentialEnc: '' });
+    expect(by).toEqual({ 1: a.id, 2: a.id, 3: b.id, 4: null, 5: null, 6: auto.id });
     expect(list.channels.find((c: { id: number }) => c.id === 6).groups).toEqual(['vip', 'default']);
     expect(list.configured).toBe(true);
     expect(JSON.stringify(h.db.select().from(channels).all())).not.toContain('SECRET');
     expect(JSON.stringify(list)).not.toContain('SECRET');
 
     const sum = await json(await request(h, 'GET', '/api/channels/summary', undefined, { cookie }));
-    expect(sum.summary).toEqual(expect.arrayContaining([{ upstreamId: a.id, enabled: 2, total: 2 }, { upstreamId: null, enabled: 3, total: 3 }]));
+    expect(sum.summary).toEqual(expect.arrayContaining([{ upstreamId: a.id, enabled: 2, total: 2 }, { upstreamId: null, enabled: 2, total: 2 }]));
   });
 
-  it('未归类渠道按主域名分组给出上游建议；按建议添加上游后这些渠道自动归类', async () => {
+  it('同步后按主域名自动创建待配置上游：猜测类型、跳过本站与已删除的域名；填入密钥后开始刷新', async () => {
     const { h, cookie, site } = await setup();
-    const a = addUpstream(h, 'a.example.com');
     site.state.channels = [
-      ch(1, 'https://a.example.com'),
-      ch(2, 'https://api.llmgw.xyz'),
-      ch(3, 'https://api.llmgw.xyz/v1', { status: 2 }),
-      ch(4, 'https://llmgw.xyz'),
-      ch(5, 'https://8yes.cc'),
+      ch(1, 'https://api.llmgw.xyz'),
+      ch(2, 'https://api.llmgw.xyz/v1', { status: 2 }),
+      ch(3, 'https://llmgw.xyz'),
+      ch(4, 'https://8yes.cc'),
+      ch(5, `${OWN}/v1`),
       ch(6, ''),
     ];
-    wire(h, site, {});
-    await connect(h, cookie);
-    expect((await request(h, 'GET', '/api/channels/upstream-suggestions')).status).toBe(401);
+    // llmgw 是 new-api（/api/status 正常）；8yes 的 /api/status 不是 new-api 形状 => 猜 sub2api
+    h.upstream.handler = (c) => {
+      if (c.url.startsWith(OWN)) return site.handle(c);
+      if (c.url === 'https://api.llmgw.xyz/api/status') return jsonRes({ success: true, data: { quota_per_unit: 500000 } });
+      if (c.url === 'https://api.llmgw.xyz/api/user/self') return jsonRes({ success: true, data: { quota: 5_000_000 } });
+      return jsonRes({ error: 'not found' }, 404);
+    };
+    const view = await connect(h, cookie);
+    expect(view.sync).toMatchObject({ ok: true, autoCreated: 2 });
 
-    const res = await json(await request(h, 'GET', '/api/channels/upstream-suggestions', undefined, { cookie }));
-    expect(res.suggestions).toEqual([
-      { domain: 'llmgw.xyz', siteUrl: 'https://api.llmgw.xyz', hosts: ['api.llmgw.xyz', 'llmgw.xyz'], channelCount: 3, enabledCount: 2, sampleNames: ['渠道2', '渠道3', '渠道4'] },
-      { domain: '8yes.cc', siteUrl: 'https://8yes.cc', hosts: ['8yes.cc'], channelCount: 1, enabledCount: 1, sampleNames: ['渠道5'] },
-    ]);
-    expect(JSON.stringify(res)).not.toContain('a.example.com');
+    const ups = await json(await request(h, 'GET', '/api/upstreams', undefined, { cookie }));
+    const byName = Object.fromEntries(ups.upstreams.map((u: { name: string }) => [u.name, u]));
+    expect(Object.keys(byName).sort()).toEqual(['8yes', 'llmgw']);
+    expect(byName.llmgw).toMatchObject({ type: 'newapi', siteUrl: 'https://api.llmgw.xyz', matchDomains: ['llmgw.xyz'], status: 'setup', needsSetup: true });
+    expect(byName['8yes']).toMatchObject({ type: 'sub2api', siteUrl: 'https://8yes.cc', status: 'setup' });
+    const llmgw = byName.llmgw.id;
+    expect([1, 2, 3].map((c) => h.s.channels.find(c)?.upstreamId)).toEqual([llmgw, llmgw, llmgw]);
+    expect(h.s.channels.find(5)?.upstreamId).toBeNull(); // 本站自己的渠道不建上游
 
-    // 按建议添加（匹配域名取主域名），子域名渠道一并归类，建议随之消失
-    const created = await request(h, 'POST', '/api/upstreams', { name: 'llmgw', type: 'newapi', siteUrl: 'https://api.llmgw.xyz', credential: 'tok', threshold: 5, matchDomains: ['llmgw.xyz'] }, { cookie });
-    expect(created.status).toBe(201);
-    const id = (await json(created)).upstream.id;
-    expect([2, 3, 4].map((c) => h.s.channels.find(c)?.upstreamId)).toEqual([id, id, id]);
-    expect(h.s.channels.find(1)?.upstreamId).toBe(a.id);
-    const after = await json(await request(h, 'GET', '/api/channels/upstream-suggestions', undefined, { cookie }));
-    expect(after.suggestions.map((x: { domain: string }) => x.domain)).toEqual(['8yes.cc']);
+    // 待配置的上游不刷新
+    expect((await post(h, `/api/upstreams/${llmgw}/refresh`, {}, { cookie })).status).toBe(400);
+    await h.s.refresher.run({ force: true });
+    expect(h.s.store.latest(llmgw)).toBeUndefined();
+
+    // 填入访问令牌即转为正常上游并立即刷新
+    const saved = await json(await request(h, 'PUT', `/api/upstreams/${llmgw}`, { credential: 'tok-llmgw' }, { cookie }));
+    expect(saved.upstream).toMatchObject({ needsSetup: false, status: 'ok', balanceUsd: 10 });
+
+    // 类型可以改（自动创建、尚未填凭证的不需要重填）
+    expect((await request(h, 'PUT', `/api/upstreams/${byName['8yes'].id}`, { type: 'newapi' }, { cookie })).status).toBe(200);
+    // 已有凭证的上游改类型必须重填凭证
+    expect((await request(h, 'PUT', `/api/upstreams/${llmgw}`, { type: 'sub2api' }, { cookie })).status).toBe(400);
+
+    // 删除后不会被下一次同步建回来
+    await request(h, 'DELETE', `/api/upstreams/${byName['8yes'].id}`, undefined, { cookie });
+    const again = await json(await request(h, 'POST', '/api/channels/sync', {}, { cookie }));
+    expect(again.result).toMatchObject({ ok: true, autoCreated: 0 });
+    expect(h.s.upstreams.list().map((u) => u.name)).toEqual(['llmgw']);
   });
 
   it('手动指定优先且不被同步覆盖；取消手动后恢复自动归类；上游新增匹配域名后立即重归类', async () => {
@@ -217,7 +238,9 @@ describe('渠道同步与归类', () => {
     await connect(h, cookie);
     await request(h, 'PUT', '/api/channels/1/upstream', { upstreamId: a.id }, { cookie });
     await request(h, 'DELETE', `/api/upstreams/${a.id}`, undefined, { cookie });
-    expect(h.s.channels.find(1)).toMatchObject({ upstreamId: null, manualUpstream: false });
+    // 退回自动归类：归到同步时为 zzz.io 自动创建的上游
+    const auto = h.s.upstreams.list().find((u) => u.needsSetup)!;
+    expect(h.s.channels.find(1)).toMatchObject({ upstreamId: auto.id, manualUpstream: false });
   });
 });
 
