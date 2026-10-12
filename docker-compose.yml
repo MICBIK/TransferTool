@@ -1,0 +1,14 @@
+services:
+  transfertool:
+    build: .
+    image: transfertool:latest
+    container_name: transfertool
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+    ports:
+      # 只绑定本机回环，由 Nginx/Caddy 反代对外提供 HTTPS
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/data
