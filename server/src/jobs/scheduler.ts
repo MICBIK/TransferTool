@@ -1,6 +1,8 @@
 import type { BalanceStore } from '../services/balanceStore.js';
 import { SNAPSHOT_RETENTION_MS } from '../services/balanceStore.js';
 import type { BalanceRefresher } from '../services/balanceRefresher.js';
+import type { ChannelService } from '../services/channels.js';
+import { SYNC_INTERVAL_MS } from '../services/channels.js';
 import type { Clock } from '../services/clock.js';
 
 export const TICK_MS = 60_000;
@@ -19,6 +21,8 @@ export class Scheduler {
     private readonly deps: {
       refresher: BalanceRefresher;
       store: BalanceStore;
+      /** 本站渠道同步（每 5 分钟）；缺省时不同步 */
+      channels?: ChannelService;
       clock: Clock;
       tickMs?: number;
       log?: (msg: string) => void;
@@ -37,11 +41,22 @@ export class Scheduler {
     if (this.stopped || this.deps.refresher.busy) return;
     try {
       this.cleanupIfDue();
+      await this.syncChannelsIfDue(opts.force === true);
       await this.deps.refresher.run({ force: opts.force });
     } catch (err) {
       // 只记录错误名，避免把含凭证的内容带进日志
       (this.deps.log ?? console.error)(`[scheduler] 本轮刷新出错：${err instanceof Error ? err.name : 'unknown'}`);
     }
+  }
+
+  /** 先同步渠道，再刷新余额：这样自动归类和“归零停渠道”总能用到较新的渠道列表。 */
+  private async syncChannelsIfDue(force: boolean): Promise<void> {
+    const channels = this.deps.channels;
+    if (!channels || !channels.configured) return;
+    const last = channels.lastAttemptAt;
+    if (!force && last !== null && this.deps.clock() - last < SYNC_INTERVAL_MS - 10_000) return;
+    const r = await channels.sync();
+    if (!r.ok && r.error) (this.deps.log ?? console.error)(`[scheduler] 本站渠道同步失败：${r.error}`);
   }
 
   private cleanupIfDue(): void {
@@ -58,6 +73,8 @@ export class Scheduler {
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
     this.deps.refresher.shutdown();
+    this.deps.channels?.shutdown();
     await this.deps.refresher.idle();
+    await this.deps.channels?.idle();
   }
 }

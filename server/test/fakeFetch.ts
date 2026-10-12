@@ -2,6 +2,9 @@ import type { FetchFn } from '../src/adapters/index.js';
 
 export interface RecordedCall {
   url: string;
+  method: string;
+  /** 请求体（JSON 字符串），无则 undefined */
+  body?: string;
   headers: Record<string, string>;
   redirect?: string;
   signal?: AbortSignal;
@@ -19,7 +22,7 @@ export function fakeFetch(handler: Handler): { fetch: FetchFn; calls: RecordedCa
   const fetchFn = (async (input: string | URL | Request, init?: RequestInit) => {
     const headers: Record<string, string> = {};
     new Headers(init?.headers).forEach((v, k) => (headers[k.toLowerCase()] = v));
-    const call: RecordedCall = { url: String(input), headers, redirect: init?.redirect, signal: init?.signal ?? undefined };
+    const call: RecordedCall = { url: String(input), method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? init.body : undefined, headers, redirect: init?.redirect, signal: init?.signal ?? undefined };
     calls.push(call);
     const out = await handler(call);
     if ('throw' in out && !(out instanceof Response)) throw out.throw;

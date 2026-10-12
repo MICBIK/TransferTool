@@ -37,6 +37,7 @@ export function upstreamRoutes(s: Services): Hono {
     if (!body.ok) return body.response;
     try {
       const row = s.upstreams.create(body.data, clientIp(c, s.config.trustProxy));
+      await s.channels.reclassify();
       // 保存后立即刷新一次，让总览马上有数据；失败不影响保存
       if (row.enabled) await s.refresher.run({ ids: [row.id], force: true });
       return c.json({ upstream: s.upstreams.view(s.upstreams.require(row.id)) }, 201);
@@ -74,16 +75,18 @@ export function upstreamRoutes(s: Services): Hono {
     if (!body.ok) return body.response;
     try {
       const row = s.upstreams.update(id, body.data, clientIp(c, s.config.trustProxy));
+      if (body.data.matchDomains !== undefined) await s.channels.reclassify();
       return c.json({ upstream: s.upstreams.view(row) });
     } catch (err) {
       return invalid(c, err);
     }
   });
 
-  app.delete('/:id', (c) => {
+  app.delete('/:id', async (c) => {
     const id = parseId(c.req.param('id'));
     if (id === null || !s.upstreams.find(id)) return notFound(c);
     s.upstreams.remove(id, clientIp(c, s.config.trustProxy));
+    await s.channels.reclassify(); // 外键已把它的渠道置为未归类，这里按剩余上游重新归类
     return c.json({ ok: true });
   });
 

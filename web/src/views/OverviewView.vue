@@ -3,11 +3,14 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
 import { NButton, NCard, NEmpty, NGrid, NGridItem, NSpace, NTag, NText, useMessage } from 'naive-ui';
 import { ApiError } from '../api';
+import { channelSummary, type ChannelCount } from '../channels';
 import { STATUS_META, TYPE_LABEL, formatAgo, formatEta, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
 const upstreams = ref<Upstream[]>([]);
 const loaded = ref(false);
+const counts = ref<Map<number | null, ChannelCount>>(new Map());
+const channelsConfigured = ref(false);
 const refreshing = ref<Set<number> | 'all'>(new Set());
 const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -21,6 +24,12 @@ function errorText(err: unknown): string {
 async function load() {
   try {
     upstreams.value = await listUpstreams();
+    // 渠道数量取不到不影响余额卡片
+    const s = await channelSummary().catch(() => null);
+    if (s) {
+      channelsConfigured.value = s.configured;
+      counts.value = new Map(s.summary.map((c) => [c.upstreamId, c]));
+    }
   } catch (err) {
     if (!loaded.value) message.error(errorText(err));
   } finally {
@@ -106,6 +115,13 @@ onBeforeUnmount(() => clearInterval(timer));
             <div v-if="u.status !== 'unsupported'">
               消耗速度 {{ u.burnUsdPerDay === null ? '暂无法估算' : `${usd(u.burnUsdPerDay)}/天` }}
               <span style="margin: 0 4px">·</span>预计可用 {{ u.balanceUsd === null ? '—' : formatEta(u.exhaustAt, now) }}
+            </div>
+            <div v-if="channelsConfigured">
+              接入渠道
+              <template v-if="counts.get(u.id)">
+                <n-text :type="counts.get(u.id)!.enabled === 0 ? 'error' : undefined">启用 {{ counts.get(u.id)!.enabled }} / 共 {{ counts.get(u.id)!.total }}</n-text>
+              </template>
+              <n-text v-else depth="3">暂无</n-text>
             </div>
             <div>
               <n-text depth="3">最后刷新 {{ formatAgo(u.lastCheckedAt, now) }}</n-text>
