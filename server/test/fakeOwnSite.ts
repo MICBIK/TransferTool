@@ -15,6 +15,22 @@ export interface FakeChannel {
   key?: string;
 }
 
+export interface FakeLog {
+  id: number;
+  created_at: number;
+  /** 2 = 消费，5 = 错误 */
+  type: number;
+  channel?: number;
+  channel_id?: number;
+  use_time?: number;
+  content?: string;
+  model_name?: string;
+  quota?: number;
+  /** 真实日志里有的敏感字段：必须不被保存 */
+  token_name?: string;
+  ip?: string;
+}
+
 export const OWN = 'https://own.example.com';
 export const OWN_TOKEN = 'own-token-SECRET-1234';
 
@@ -22,7 +38,7 @@ export const OWN_TOKEN = 'own-token-SECRET-1234';
  * 假的本站 new-api：分页列表、单个/批量启停、测试。state 可随意改动来模拟站长在本站的操作。
  * 记录每个请求，便于断言“只发了 {status}”之类。
  */
-export function fakeOwnSite(opts: { pageSize?: number; batch?: boolean; zeroBased?: boolean } = {}) {
+export function fakeOwnSite(opts: { pageSize?: number; batch?: boolean; zeroBased?: boolean; logPageSize?: number; logArray?: boolean } = {}) {
   const state = {
     channels: [] as FakeChannel[],
     /** 为 true 时，所有写请求返回 500 */
@@ -33,6 +49,11 @@ export function fakeOwnSite(opts: { pageSize?: number; batch?: boolean; zeroBase
     batchPartial: null as number | null,
     testResult: { success: true, message: '', time: 0.42 } as { success: boolean; message: string; time: number },
     calls: [] as RecordedCall[],
+    logs: [] as FakeLog[],
+    /** 为 true 时日志接口返回 403 ACCESS_TOKEN_SCOPE_DENIED */
+    logScopeDenied: false,
+    /** 为 true 时日志接口返回 HTTP 200 + success:false */
+    logBusinessError: false,
   };
   const pageSize = opts.pageSize ?? 100;
   const ok = (data?: unknown) => jsonRes({ success: true, message: '', ...(data === undefined ? {} : { data }) });
@@ -51,6 +72,20 @@ export function fakeOwnSite(opts: { pageSize?: number; batch?: boolean; zeroBase
       const per = Math.min(size, pageSize);
       const start = opts.zeroBased ? p * per : Math.max(0, p - 1) * per;
       return ok({ items: state.channels.slice(start, start + per), total: state.channels.length });
+    }
+    if (c.method === 'GET' && path === '/api/log/') {
+      if (state.logScopeDenied) return jsonRes({ success: false, message: 'missing scope log:read', code: 'ACCESS_TOKEN_SCOPE_DENIED' }, 403);
+      if (state.logBusinessError) return jsonRes({ success: false, message: '无权查看日志' });
+      const q = url.searchParams;
+      const type = Number(q.get('type') ?? '0');
+      const start = Number(q.get('start_timestamp') ?? '0');
+      const end = Number(q.get('end_timestamp') ?? '9999999999');
+      const p = Number(q.get('p') ?? '1');
+      const per = Math.min(Number(q.get('page_size') ?? '100'), opts.logPageSize ?? 100);
+      const rows = state.logs.filter((l) => (type === 0 || l.type === type) && l.created_at >= start && l.created_at <= end).sort((a, b) => b.id - a.id);
+      const items = rows.slice((Math.max(1, p) - 1) * per, Math.max(1, p) * per);
+      if (opts.logArray) return jsonRes({ success: true, data: items });
+      return jsonRes({ success: true, message: '', data: { items, total: rows.length, page: p, page_size: per } });
     }
     if (c.method === 'POST' && path === '/api/channel/status/batch') {
       if (opts.batch === false) return new Response('404 page not found', { status: 404 });

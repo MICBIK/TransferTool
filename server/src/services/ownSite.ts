@@ -69,7 +69,7 @@ export class OwnSiteService {
     const currentUrl = settings.get('own_site_url');
 
     if (patch.url === '') {
-      for (const key of ['own_site_url', 'own_site_token', 'own_site_user_id'] as const) settings.delete(key);
+      for (const key of ['own_site_url', 'own_site_token', 'own_site_user_id', 'log_ingest_state'] as const) settings.delete(key);
       audit.record('settings.updated', { ip, detail: 'ownSite.disconnected' });
       return;
     }
@@ -81,6 +81,8 @@ export class OwnSiteService {
         throw new OwnSiteValidationError('修改了本站地址，请同时重新填写本站访问令牌');
       }
       if (url !== currentUrl) {
+        // 换了主机：旧站的日志游标不再适用
+        if (currentUrl && new URL(url).host !== new URL(currentUrl).host) settings.delete('log_ingest_state');
         settings.set('own_site_url', url);
         changed.push('ownSite.url');
       }

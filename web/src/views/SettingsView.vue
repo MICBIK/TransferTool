@@ -22,6 +22,8 @@ interface SettingsView {
   smtpVerified: boolean;
   alertRepeatHours: number;
   autoDisableAtZero: boolean;
+  healthOkRate: number;
+  healthDegradedRate: number;
   emergencyPasswordConfigured: boolean;
   notice?: string;
 }
@@ -46,11 +48,13 @@ const state = reactive({
   smtpVerified: false,
   alertRepeatHours: 6,
   autoDisableAtZero: false,
+  healthOkRate: 95,
+  healthDegradedRate: 80,
   emergencyPasswordConfigured: false,
 });
 
 const pwd = reactive({ current: '', next: '', confirm: '' });
-const busy = reactive({ password: false, method: false, smtp: false, test: false, alerts: false });
+const busy = reactive({ password: false, method: false, smtp: false, test: false, alerts: false, health: false });
 const loaded = ref(false);
 
 function apply(v: SettingsView) {
@@ -60,6 +64,8 @@ function apply(v: SettingsView) {
   state.smtpVerified = v.smtpVerified;
   state.alertRepeatHours = v.alertRepeatHours;
   state.autoDisableAtZero = v.autoDisableAtZero;
+  state.healthOkRate = v.healthOkRate;
+  state.healthDegradedRate = v.healthDegradedRate;
   state.emergencyPasswordConfigured = v.emergencyPasswordConfigured;
 }
 
@@ -180,6 +186,19 @@ async function saveAlerts() {
     message.error(errorText(err));
   } finally {
     busy.alerts = false;
+  }
+}
+
+async function saveHealth() {
+  busy.health = true;
+  try {
+    const v = await api<SettingsView>('/api/settings', { method: 'PUT', body: { healthOkRate: state.healthOkRate, healthDegradedRate: state.healthDegradedRate } });
+    apply(v);
+    message.success('健康阈值已保存');
+  } catch (err) {
+    message.error(errorText(err));
+  } finally {
+    busy.health = false;
   }
 }
 
@@ -312,6 +331,23 @@ onMounted(() => void load().catch((err) => message.error(errorText(err))));
         </n-form-item>
         <n-alert v-if="!state.smtpVerified" type="info" :show-icon="false" style="margin-bottom: 16px">提醒邮件使用上方的 SMTP 与站长邮箱，请先发送测试邮件验证。</n-alert>
         <n-button type="primary" :loading="busy.alerts" @click="saveAlerts">保存提醒设置</n-button>
+      </n-form>
+    </n-card>
+
+    <n-card title="渠道健康">
+      <n-form label-placement="left" label-width="120">
+        <n-form-item label="“正常”成功率">
+          <n-input-number v-model:value="state.healthOkRate" :min="2" :max="100" :precision="0" style="width: 140px" />
+          <span style="margin-left: 12px">% 及以上（近 1 小时成功率）</span>
+        </n-form-item>
+        <n-form-item label="“降级”成功率">
+          <n-input-number v-model:value="state.healthDegradedRate" :min="1" :max="99" :precision="0" style="width: 140px" />
+          <span style="margin-left: 12px">% 及以上为降级，低于此值为异常；近 30 分钟有请求却没有一次成功也判为异常；近 1 小时没有请求为空闲</span>
+        </n-form-item>
+        <n-alert type="info" :show-icon="false" style="margin-bottom: 16px">
+          健康数据来自本站的使用日志与错误日志（令牌需要 log:read 权限，本站需开启错误日志记录）。本工具每 5 分钟拉取一次并只保存聚合结果（保留 30 天），不保存原始日志。
+        </n-alert>
+        <n-button type="primary" :loading="busy.health" @click="saveHealth">保存健康阈值</n-button>
       </n-form>
     </n-card>
   </n-space>

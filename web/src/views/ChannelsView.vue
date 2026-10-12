@@ -16,6 +16,9 @@ import {
   type ChannelListing,
   type ChannelTestResult,
 } from '../channels';
+import HealthNotices from '../components/HealthNotices.vue';
+import HealthTag from '../components/HealthTag.vue';
+import { getHealth, latency, pct, type ChannelHealth, type HealthOverview } from '../health';
 import { formatAgo, listUpstreams, type Upstream } from '../upstreams';
 
 const message = useMessage();
@@ -24,6 +27,8 @@ const dialog = useDialog();
 const listing = ref<ChannelListing | null>(null);
 const upstreams = ref<Upstream[]>([]);
 const loaded = ref(false);
+const health = ref<HealthOverview | null>(null);
+const healthById = computed(() => new Map((health.value?.channels ?? []).map((h) => [h.channelId, h])));
 const syncing = ref(false);
 const batchBusy = ref(false);
 const busy = ref<Set<number>>(new Set());
@@ -82,6 +87,8 @@ async function load() {
     const [l, u] = await Promise.all([listChannels(), listUpstreams()]);
     upstreams.value = u;
     apply(l);
+    // 健康数据取不到不影响渠道列表
+    health.value = await getHealth().catch(() => health.value);
   } catch (err) {
     if (!loaded.value) message.error(errorText(err));
   } finally {
@@ -230,6 +237,26 @@ const columns = computed<DataTableColumns<Channel>>(() => [
       ]);
     },
   },
+  {
+    title: '健康',
+    key: 'health',
+    minWidth: 190,
+    render: (c) => {
+      const hh: ChannelHealth | undefined = healthById.value.get(c.id);
+      if (!hh) return h(NText, { depth: 3 }, { default: () => '—' });
+      if (hh.status === 'idle') {
+        return h('div', [
+          h(HealthTag, { status: hh.status, title: '近 1 小时没有请求' }),
+          h(NText, { depth: 3, style: 'display:block;font-size:12px' }, { default: () => `24h ${pct(hh.successRate24h)} · 最近成功 ${hh.lastSuccessAt ? formatAgo(hh.lastSuccessAt, now.value) : '无'}` }),
+        ]);
+      }
+      return h('div', { style: 'font-size:12px;line-height:1.6' }, [
+        h(HealthTag, { status: hh.status, title: `近 1 小时 ${hh.requests1h - hh.errors1h}/${hh.requests1h} 次成功` }),
+        h('div', `成功率 1h ${pct(hh.successRate1h)} · 24h ${pct(hh.successRate24h)}`),
+        h(NText, { depth: 3 }, { default: () => `均耗时 ${latency(hh.avgLatencyMs1h ?? hh.avgLatencyMs24h)} · 最近成功 ${hh.lastSuccessAt ? formatAgo(hh.lastSuccessAt, now.value) : '无'}` }),
+      ]);
+    },
+  },
   { title: '优先级/权重', key: 'priority', width: 110, render: (c) => `${c.priority} / ${c.weight}` },
   { title: '响应', key: 'responseTimeMs', width: 80, render: (c) => (c.responseTimeMs > 0 ? `${c.responseTimeMs} ms` : '—') },
   {
@@ -275,6 +302,7 @@ onBeforeUnmount(() => clearInterval(timer));
 
     <template v-else>
       <n-alert v-if="listing?.lastError" type="error" :show-icon="false">最近一次同步失败：{{ listing.lastError }}（下方为上次成功同步的缓存数据）</n-alert>
+      <health-notices :health="health" />
 
       <n-space justify="space-between" align="center">
         <n-text depth="3">共 {{ channels.length }} 个渠道，当前显示 {{ filtered.length }} 个 · 最近同步 {{ formatAgo(listing?.syncedAt ?? null, now) }}（每 5 分钟自动同步）</n-text>
@@ -303,7 +331,7 @@ onBeforeUnmount(() => clearInterval(timer));
         :checked-row-keys="checked"
         @update:checked-row-keys="(keys: Array<string | number>) => (checked = keys as number[])"
         :pagination="{ pageSize: 50 }"
-        :scroll-x="1000"
+        :scroll-x="1200"
         size="small"
       />
     </template>

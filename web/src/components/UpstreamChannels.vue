@@ -1,7 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { NButton, NEmpty, NSpace, NTag, NText, useDialog, useMessage } from 'naive-ui';
+import { NButton, NCollapse, NCollapseItem, NEmpty, NSpace, NTag, NText, useDialog, useMessage } from 'naive-ui';
 import { ApiError } from '../api';
+import { getUpstreamHealth, latency, pct, type ChannelDetail, type UpstreamRollup } from '../health';
+import { formatAgo } from '../upstreams';
+import HealthSparkline from './HealthSparkline.vue';
+import HealthTag from './HealthTag.vue';
 import { channelStatusMeta, describeResult, listChannels, setUpstreamChannelsStatus, type Channel, type ChannelListing } from '../channels';
 
 const props = defineProps<{ upstreamId: number; upstreamName: string }>();
@@ -10,6 +14,8 @@ const dialog = useDialog();
 
 const listing = ref<ChannelListing | null>(null);
 const busy = ref(false);
+const rollup = ref<UpstreamRollup | null>(null);
+const details = ref<Map<number, ChannelDetail>>(new Map());
 
 const errorText = (err: unknown) => (err instanceof ApiError ? err.message : '网络错误，请稍后重试');
 const mine = computed<Channel[]>(() => (listing.value?.channels ?? []).filter((c) => c.upstreamId === props.upstreamId));
@@ -35,6 +41,16 @@ async function load() {
     listing.value = await listChannels();
   } catch (err) {
     message.error(errorText(err));
+    return;
+  }
+  // 健康数据取不到不影响渠道列表
+  try {
+    const h = await getUpstreamHealth(props.upstreamId);
+    rollup.value = h.rollup;
+    details.value = new Map(h.channels.map((c) => [c.channelId, c]));
+  } catch {
+    rollup.value = null;
+    details.value = new Map();
   }
 }
 
@@ -91,11 +107,40 @@ onMounted(() => void load());
       </n-space>
     </div>
 
-    <div v-for="c in mine" :key="c.id" style="display: flex; gap: 8px; align-items: center; font-size: 13px">
-      <n-tag size="small" :type="channelStatusMeta(c.status).tag">{{ channelStatusMeta(c.status).label }}</n-tag>
-      <span>{{ c.name }}</span>
-      <n-text depth="3">#{{ c.id }} · {{ c.groups.join('、') || '无分组' }}</n-text>
-      <n-tag v-if="c.autoDisabled" size="small" type="warning" :bordered="false">余额归零停用</n-tag>
+    <n-space v-if="rollup" align="center" :size="8">
+      <n-text depth="3" style="font-size: 12px">渠道整体健康</n-text>
+      <health-tag :status="rollup.status" />
+      <n-text depth="3" style="font-size: 12px">取启用且有请求的渠道中最差的状态；趋势图为近 24 小时成功率（空白处表示该时段没有请求）</n-text>
+    </n-space>
+
+    <div v-for="c in mine" :key="c.id" style="border-top: 1px solid var(--n-border-color, rgba(128, 128, 128, 0.2)); padding-top: 10px">
+      <div style="display: flex; gap: 8px; align-items: center; font-size: 13px; flex-wrap: wrap">
+        <n-tag size="small" :type="channelStatusMeta(c.status).tag">{{ channelStatusMeta(c.status).label }}</n-tag>
+        <span>{{ c.name }}</span>
+        <n-text depth="3">#{{ c.id }} · {{ c.groups.join('、') || '无分组' }}</n-text>
+        <n-tag v-if="c.autoDisabled" size="small" type="warning" :bordered="false">余额归零停用</n-tag>
+        <health-tag v-if="details.get(c.id)" :status="details.get(c.id)!.status" />
+      </div>
+      <template v-if="details.get(c.id)">
+        <div style="font-size: 12px; margin-top: 4px">
+          成功率 1h {{ pct(details.get(c.id)!.successRate1h) }} · 24h {{ pct(details.get(c.id)!.successRate24h) }}
+          <n-text depth="3">
+            · 均耗时 {{ latency(details.get(c.id)!.avgLatencyMs1h ?? details.get(c.id)!.avgLatencyMs24h) }} · 24h 请求 {{ details.get(c.id)!.requests24h }}（错误 {{ details.get(c.id)!.errors24h }}）· 最近成功
+            {{ details.get(c.id)!.lastSuccessAt ? formatAgo(details.get(c.id)!.lastSuccessAt) : '无' }}
+          </n-text>
+        </div>
+        <template v-if="details.get(c.id)!.requests24h > 0">
+          <health-sparkline :points="details.get(c.id)!.trend" style="margin-top: 4px; max-width: 560px" />
+          <n-collapse v-if="details.get(c.id)!.errors.length > 0" style="margin-top: 4px">
+            <n-collapse-item :title="`错误 Top ${details.get(c.id)!.errors.length}（近 24 小时）`" :name="c.id">
+              <div v-for="e in details.get(c.id)!.errors" :key="e.message" style="font-size: 12px; display: flex; gap: 8px">
+                <n-tag size="small" type="error" :bordered="false">{{ e.count }} 次</n-tag>
+                <span style="word-break: break-all">{{ e.message }}</span>
+              </div>
+            </n-collapse-item>
+          </n-collapse>
+        </template>
+      </template>
     </div>
   </n-space>
 </template>

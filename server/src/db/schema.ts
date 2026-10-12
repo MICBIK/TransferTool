@@ -140,3 +140,24 @@ export const channels = sqliteTable(
   },
   (t) => [primaryKey({ columns: [t.siteId, t.channelId] }), index('channels_upstream_idx').on(t.upstreamId)],
 );
+
+/**
+ * 本站渠道的 5 分钟聚合统计（只存聚合，不存原始日志）。bucket_start 为毫秒时间戳，按 5 分钟对齐。
+ * requests = 消费日志数 + 错误日志数；errors = 错误日志数；total_use_time = 消费日志（成功请求）的 use_time 之和（秒）。
+ * error_samples 是 JSON：Top 5 归一化后的错误信息及次数（信息截断 200 字符）。
+ * last_success_at 是该桶内最近一次成功请求的时间（毫秒）。保留 30 天。
+ */
+export const channelStats = sqliteTable(
+  'channel_stats',
+  {
+    siteId: integer('site_id').notNull().default(1),
+    channelId: integer('channel_id').notNull(),
+    bucketStart: integer('bucket_start').notNull(),
+    requests: integer('requests').notNull().default(0),
+    errors: integer('errors').notNull().default(0),
+    totalUseTime: integer('total_use_time').notNull().default(0),
+    errorSamples: text('error_samples').notNull().default('[]'),
+    lastSuccessAt: integer('last_success_at'),
+  },
+  (t) => [primaryKey({ columns: [t.siteId, t.channelId, t.bucketStart] }), index('channel_stats_bucket_idx').on(t.bucketStart)],
+);
