@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
-import { NButton, NCard, NEmpty, NGrid, NGridItem, NSpace, NTag, NText, useMessage } from 'naive-ui';
+import { NAlert, NButton, NCard, NEmpty, NGrid, NGridItem, NSpace, NTag, NText, useMessage } from 'naive-ui';
 import { ApiError } from '../api';
 import { channelSummary, type ChannelCount } from '../channels';
 import HealthNotices from '../components/HealthNotices.vue';
 import HealthTag from '../components/HealthTag.vue';
 import { getHealth, type HealthOverview, type UpstreamRollup } from '../health';
-import { STATUS_META, TYPE_LABEL, formatAgo, formatEta, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
+import { STATUS_META, TYPE_LABEL, burnText, etaText, formatAgo, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
 const upstreams = ref<Upstream[]>([]);
@@ -15,6 +15,7 @@ const loaded = ref(false);
 const counts = ref<Map<number | null, ChannelCount>>(new Map());
 const channelsConfigured = ref(false);
 const health = ref<HealthOverview | null>(null);
+const setupCount = computed(() => upstreams.value.filter((u) => u.needsSetup).length);
 const rollups = computed(() => new Map<number, UpstreamRollup>((health.value?.upstreams ?? []).map((r) => [r.upstreamId, r])));
 const refreshing = ref<Set<number> | 'all'>(new Set());
 const now = ref(Date.now());
@@ -92,9 +93,20 @@ onBeforeUnmount(() => clearInterval(timer));
 
     <health-notices :health="health" />
 
-    <n-empty v-if="upstreams.length === 0" description="还没有上游。添加一个 new-api / sub2api 上游后，这里会显示余额与消耗速度。" style="margin-top: 60px">
+    <n-alert v-if="setupCount > 0" type="info" :show-icon="false">
+      根据本站渠道自动创建了 {{ setupCount }} 个上游（标为“待配置”）。到对应上游站点生成访问令牌（new-api）或 API Key（sub2api），点卡片上的「填入密钥」粘贴进去，并确认类型是否正确。不需要的上游直接删除即可，之后不会再自动创建。
+    </n-alert>
+
+    <n-empty
+      v-if="upstreams.length === 0"
+      :description="channelsConfigured ? '还没有上游。本站渠道里没有可识别的上游域名，可以手动添加 new-api / sub2api 上游。' : '还没有上游。先在「设置 → 本站连接」连上你的 new-api，同步渠道后会按域名自动创建上游；也可以手动添加。'"
+      style="margin-top: 60px"
+    >
       <template #extra>
-        <router-link to="/upstreams/new" custom v-slot="{ navigate }"><n-button type="primary" @click="navigate">添加上游</n-button></router-link>
+        <n-space justify="center">
+          <router-link v-if="!channelsConfigured" to="/settings#site" custom v-slot="{ navigate }"><n-button type="primary" @click="navigate">去连接本站</n-button></router-link>
+          <router-link to="/upstreams/new" custom v-slot="{ navigate }"><n-button :type="channelsConfigured ? 'primary' : 'default'" @click="navigate">手动添加上游</n-button></router-link>
+        </n-space>
       </template>
     </n-empty>
 
@@ -111,6 +123,18 @@ onBeforeUnmount(() => clearInterval(timer));
             </n-space>
           </template>
 
+          <template v-if="u.needsSetup">
+            <div style="font-size: 13px; line-height: 1.9">
+              <div>{{ u.siteUrl }}</div>
+              <div>类型（自动识别，请确认）：{{ TYPE_LABEL[u.type] }}</div>
+              <div v-if="channelsConfigured && counts.get(u.id)">接入渠道 启用 {{ counts.get(u.id)!.enabled }} / 共 {{ counts.get(u.id)!.total }}</div>
+            </div>
+            <n-space style="margin-top: 12px" :size="8">
+              <router-link :to="`/upstreams/${u.id}#config`" custom v-slot="{ navigate }"><n-button size="small" type="primary" @click="navigate">填入密钥</n-button></router-link>
+              <n-button size="small" quaternary tag="a" :href="u.siteUrl" target="_blank" rel="noopener noreferrer">打开站点</n-button>
+            </n-space>
+          </template>
+          <template v-else>
           <div style="font-size: 28px; font-weight: 600; line-height: 1.3" :style="{ color: STATUS_META[u.status].color }">
             {{ u.status === 'unknown' ? '余额未知' : u.status === 'unsupported' ? '暂不支持订阅制' : usd(u.balanceUsd) }}
           </div>
@@ -121,8 +145,8 @@ onBeforeUnmount(() => clearInterval(timer));
               阈值 {{ usd(u.threshold) }}<template v-if="u.emergencyThreshold !== null">，紧急 {{ usd(u.emergencyThreshold) }}</template>
             </div>
             <div v-if="u.status !== 'unsupported'">
-              消耗速度 {{ u.burnUsdPerDay === null ? '暂无法估算' : `${usd(u.burnUsdPerDay)}/天` }}
-              <span style="margin: 0 4px">·</span>预计可用 {{ u.balanceUsd === null ? '—' : formatEta(u.exhaustAt, now) }}
+              消耗速度 {{ burnText(u, now) }}
+              <span style="margin: 0 4px">·</span>预计可用 {{ etaText(u, now) }}
             </div>
             <div v-if="channelsConfigured">
               接入渠道
@@ -148,7 +172,9 @@ onBeforeUnmount(() => clearInterval(timer));
             <n-button v-if="u.effectiveTopupUrl" size="small" type="primary" secondary tag="a" :href="u.effectiveTopupUrl" target="_blank" rel="noopener noreferrer">充值</n-button>
             <n-button size="small" :loading="isRefreshing(u.id)" :disabled="!u.enabled" @click="onRefresh(u)">立即刷新</n-button>
             <router-link :to="`/upstreams/${u.id}`" custom v-slot="{ navigate }"><n-button size="small" quaternary @click="navigate">详情</n-button></router-link>
+            <router-link :to="`/upstreams/${u.id}#config`" custom v-slot="{ navigate }"><n-button size="small" quaternary @click="navigate">编辑</n-button></router-link>
           </n-space>
+          </template>
         </n-card>
       </n-grid-item>
     </n-grid>

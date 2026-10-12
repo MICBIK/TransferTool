@@ -1,6 +1,7 @@
 import { Hono, type Context } from 'hono';
 import { z } from 'zod';
 import { apiError, clientIp, parseBody } from '../http.js';
+import { MASK } from '../services/adminSettings.js';
 import type { Services } from '../services/index.js';
 import {
   createUpstreamSchema,
@@ -9,6 +10,7 @@ import {
   UpstreamNotFoundError,
   UpstreamValidationError,
   updateUpstreamSchema,
+  parseDomains,
   type SecretField,
 } from '../services/upstreams.js';
 
@@ -76,7 +78,10 @@ export function upstreamRoutes(s: Services): Hono {
     try {
       const row = s.upstreams.update(id, body.data, clientIp(c, s.config.trustProxy));
       if (body.data.matchDomains !== undefined) await s.channels.reclassify();
-      return c.json({ upstream: s.upstreams.view(row) });
+      // 填了新凭证（包括给自动创建的上游第一次填）就立即刷新一次，马上看到余额
+      const credentialGiven = body.data.credential !== undefined && body.data.credential !== '' && body.data.credential !== MASK;
+      if (credentialGiven && row.enabled && !row.needsSetup) await s.refresher.run({ ids: [id], force: true });
+      return c.json({ upstream: s.upstreams.view(s.upstreams.require(id)) });
     } catch (err) {
       return invalid(c, err);
     }
@@ -85,7 +90,10 @@ export function upstreamRoutes(s: Services): Hono {
   app.delete('/:id', async (c) => {
     const id = parseId(c.req.param('id'));
     if (id === null || !s.upstreams.find(id)) return notFound(c);
+    const removed = s.upstreams.require(id);
     s.upstreams.remove(id, clientIp(c, s.config.trustProxy));
+    // 删掉的上游不再根据渠道自动建回来
+    s.channels.ignoreDomains(parseDomains(removed.matchDomains));
     await s.channels.reclassify(); // 外键已把它的渠道置为未归类，这里按剩余上游重新归类
     return c.json({ ok: true });
   });
@@ -94,6 +102,7 @@ export function upstreamRoutes(s: Services): Hono {
     const id = parseId(c.req.param('id'));
     const row = id === null ? undefined : s.upstreams.find(id);
     if (id === null || !row) return notFound(c);
+    if (row.needsSetup) return apiError(c, 400, 'upstream_needs_setup', '请先确认类型并填写访问令牌 / API Key');
     if (!row.enabled) return apiError(c, 400, 'upstream_disabled', '该上游已停用，请先启用再刷新');
     const summary = await s.refresher.run({ ids: [id], force: true });
     const fresh = s.upstreams.find(id);

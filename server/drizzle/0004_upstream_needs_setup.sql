@@ -1,0 +1,1 @@
+ALTER TABLE `upstreams` ADD `needs_setup` integer DEFAULT false NOT NULL;

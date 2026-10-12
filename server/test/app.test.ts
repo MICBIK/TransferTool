@@ -280,6 +280,21 @@ describe('登录方式与 SMTP', () => {
     expect(text).not.toContain('secret-detail');
   });
 
+  it('填了 SMTP 主机却没有发件人时拒绝保存', async () => {
+    const h = await makeHarness();
+    const cookie = await login(h);
+    const res = await request(h, 'PUT', '/api/settings', { ...SMTP_BODY, smtp: { ...SMTP_BODY.smtp, from: '' } }, { cookie });
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(await res.json())).toContain('发件人');
+    expect(h.s.settings.get('smtp_host')).toBeUndefined();
+    // 已保存完整配置后，单独清空发件人同样被拒绝；只改其他字段不受影响
+    await request(h, 'PUT', '/api/settings', SMTP_BODY, { cookie });
+    expect((await request(h, 'PUT', '/api/settings', { smtp: { from: '  ' } }, { cookie })).status).toBe(400);
+    expect((await request(h, 'PUT', '/api/settings', { smtp: { port: 587 } }, { cookie })).status).toBe(200);
+    // 主机和发件人一起清空（停用邮件）是允许的
+    expect((await request(h, 'PUT', '/api/settings', { smtp: { host: '', from: '' } }, { cookie })).status).toBe(200);
+  });
+
   it('未配置 SMTP 时测试邮件返回 400', async () => {
     const h = await makeHarness();
     const cookie = await login(h);

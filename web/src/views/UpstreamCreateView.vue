@@ -5,6 +5,7 @@ import UpstreamForm from '../components/UpstreamForm.vue';
 import type { Upstream } from '../upstreams';
 
 const router = useRouter();
+
 function onSaved(u: Upstream) {
   void router.push(`/upstreams/${u.id}`);
 }

@@ -39,3 +39,77 @@ export function classifyChannel(baseUrl: string, upstreams: UpstreamDomains[]): 
   }
   return best?.id ?? null;
 }
+
+/** 常见的两段式公共后缀（如 com.cn），这些后缀下主域名取三段。 */
+const TWO_LEVEL_SUFFIXES = new Set([
+  'com.cn', 'net.cn', 'org.cn', 'gov.cn', 'edu.cn', 'ac.cn',
+  'com.hk', 'net.hk', 'org.hk', 'com.tw', 'net.tw', 'org.tw', 'com.sg', 'com.my',
+  'co.uk', 'org.uk', 'co.jp', 'ne.jp', 'or.jp', 'co.kr', 'or.kr', 'com.au', 'net.au', 'org.au', 'co.nz', 'co.in', 'com.br',
+]);
+
+/**
+ * 主机名的“主域名”（近似可注册域名）：api.llmgw.xyz → llmgw.xyz，a.b.example.com.cn → example.com.cn。
+ * IP 地址与单段主机名原样返回。用于把同一家上游的多个子域名归成一组。
+ */
+export function baseDomain(host: string): string {
+  const h = host.toLowerCase().replace(/\.$/, '');
+  if (/^[\d.]+$/.test(h) || h.includes(':')) return h;
+  const parts = h.split('.');
+  if (parts.length <= 2) return h;
+  const keep = TWO_LEVEL_SUFFIXES.has(parts.slice(-2).join('.')) ? 3 : 2;
+  return parts.slice(-keep).join('.');
+}
+
+export interface UpstreamSuggestion {
+  /** 主域名，作为建议的匹配域名 */
+  domain: string;
+  /** 建议的站点地址：这些渠道里最常见的 base_url 源（协议 + 主机 + 端口） */
+  siteUrl: string;
+  /** 出现过的具体主机名 */
+  hosts: string[];
+  channelCount: number;
+  enabledCount: number;
+  /** 最多 5 个渠道名，便于辨认 */
+  sampleNames: string[];
+}
+
+/** 把未归类渠道按主域名分组，作为“可添加的上游”建议；渠道多的排前面。 */
+export function suggestUpstreams(rows: { baseUrl: string; name: string; status: number }[]): UpstreamSuggestion[] {
+  interface Group {
+    origins: Map<string, number>;
+    hosts: Set<string>;
+    count: number;
+    enabled: number;
+    names: string[];
+  }
+  const groups = new Map<string, Group>();
+  for (const r of rows) {
+    const host = hostOf(r.baseUrl);
+    if (!host) continue;
+    let origin: string;
+    try {
+      const text = r.baseUrl.trim();
+      origin = new URL(text.includes('://') ? text : `https://${text}`).origin.toLowerCase();
+    } catch {
+      continue;
+    }
+    const domain = baseDomain(host);
+    const g: Group = groups.get(domain) ?? { origins: new Map<string, number>(), hosts: new Set<string>(), count: 0, enabled: 0, names: [] };
+    g.origins.set(origin, (g.origins.get(origin) ?? 0) + 1);
+    g.hosts.add(host);
+    g.count++;
+    if (r.status === 1) g.enabled++;
+    if (g.names.length < 5) g.names.push(r.name);
+    groups.set(domain, g);
+  }
+  return [...groups]
+    .map(([domain, g]) => ({
+      domain,
+      siteUrl: [...g.origins].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]![0],
+      hosts: [...g.hosts].sort(),
+      channelCount: g.count,
+      enabledCount: g.enabled,
+      sampleNames: g.names,
+    }))
+    .sort((a, b) => b.channelCount - a.channelCount || a.domain.localeCompare(b.domain));
+}

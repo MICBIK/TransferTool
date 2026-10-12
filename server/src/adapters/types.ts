@@ -9,8 +9,11 @@ export interface AdapterUpstream {
   /** 已规范化（无尾部斜杠，仅 http/https） */
   siteUrl: string;
   credential: string;
-  /** new-api 用户 ID（New-Api-User 头） */
+  /** new-api 用户 ID（New-Api-User 头）；没填时可用登录账号密码自动获取 */
   userId?: string;
+  /** 上游登录账号与密码（可选）：新版 new-api 要求用户 ID 时，用它登录一次拿到 ID */
+  account?: string;
+  password?: string;
   /** 汇率系数：站内美元 × 系数 = 实际折算美元 */
   rateFactor: number;
 }
@@ -33,6 +36,8 @@ export interface BalanceResult {
   error?: string;
   /** 上游是订阅制：不是错误，也不触发提醒 */
   unsupported?: boolean;
+  /** 本次通过登录自动获取到的 new-api 用户 ID，调用方应保存下来，下次直接使用 */
+  discoveredUserId?: string;
 }
 
 export interface FetchContext {

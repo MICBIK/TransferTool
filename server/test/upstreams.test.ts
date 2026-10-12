@@ -86,9 +86,46 @@ describe('上游接口', () => {
     expect(copied.value).toBe('new-pw');
 
     expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { siteUrl: 'https://other.example.org' }, { cookie })).status).toBe(400);
-    expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { siteUrl: 'https://other.example.org', credential: 'new-token' }, { cookie })).status).toBe(200);
+    // 登录密码会用于自动获取用户 ID，换主机时同样必须重填
+    expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { siteUrl: 'https://other.example.org', credential: 'new-token' }, { cookie })).status).toBe(400);
+    expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { siteUrl: 'https://other.example.org', credential: 'new-token', password: 'pw2' }, { cookie })).status).toBe(200);
     expect((await request(h, 'PUT', `/api/upstreams/${upstream.id}`, { threshold: 1 }, { cookie })).status).toBe(400); // 紧急阈值 2 ≥ 1
     expect((await request(h, 'PUT', '/api/upstreams/999', { name: 'x' }, { cookie })).status).toBe(404);
+  });
+
+  it('没填用户 ID 而站点要求时：用账号密码登录获取一次并加密保存，之后直接使用', async () => {
+    const { h, cookie } = await setup();
+    let logins = 0;
+    h.upstream.handler = (c) => {
+      if (c.url.endsWith('/api/status')) return jsonRes({ success: true, data: { quota_per_unit: 500000 } });
+      if (c.url.endsWith('/api/user/login')) {
+        logins++;
+        return jsonRes({ success: true, data: { id: 31 } });
+      }
+      return c.headers['new-api-user'] === '31' ? jsonRes({ success: true, data: { quota: 2_500_000 } }) : jsonRes({ success: false, message: 'New-Api-User header not provided' }, 401);
+    };
+    const res = await json(await request(h, 'POST', '/api/upstreams', { ...NEW, userId: '' }, { cookie }));
+    expect(res.upstream).toMatchObject({ status: 'low', balanceUsd: 5 }); // 低于阈值 10
+    expect(res.upstream.secrets.userId.set).toBe(true);
+    const row = h.db.select().from(upstreams).get()!;
+    expect(row.userIdEnc).toMatch(/^enc:v1:/);
+    await request(h, 'POST', `/api/upstreams/${res.upstream.id}/refresh`, {}, { cookie });
+    expect(logins).toBe(1);
+  });
+
+  it('状态按最新余额判定：没配 SMTP（提醒发不出去）时低于阈值也显示余额不足', async () => {
+    const { h, cookie } = await setup();
+    fakeNewApi(h, { usd: 1 });
+    const { upstream } = await json(await request(h, 'POST', '/api/upstreams', NEW, { cookie }));
+    expect(upstream).toMatchObject({ status: 'critical', balanceUsd: 1 }); // 紧急阈值 2
+  });
+
+  it('手动填写的用户 ID 接受二开站点的字母数字编码，拒绝其他字符', async () => {
+    const { h, cookie } = await setup();
+    fakeNewApi(h, { usd: 1 });
+    expect((await request(h, 'POST', '/api/upstreams', { ...NEW, userId: '9B9YQ5' }, { cookie })).status).toBe(201);
+    expect(h.upstream.calls.find((c) => c.url.endsWith('/api/user/self'))?.headers['new-api-user']).toBe('9B9YQ5');
+    expect((await request(h, 'POST', '/api/upstreams', { ...NEW, userId: 'a b\n' }, { cookie })).status).toBe(400);
   });
 
   it('复制接口：解密下发并写 audit_log（不含明文）；未设置的字段 404', async () => {
@@ -303,6 +340,7 @@ describe('余额提醒（端到端，假 fetch + 假 SMTP）', () => {
     const state = { usd: 20 };
     fakeNewApi(h, state);
     const { upstream } = await json(await request(h, 'POST', '/api/upstreams', NEW, { cookie }));
+    expect(upstream.burnBasis).toBe('collecting'); // 只有一个快照
     for (const usd of [16, 12]) {
       state.usd = usd;
       h.clock.now += 3600_000;
@@ -312,6 +350,7 @@ describe('余额提醒（端到端，假 fetch + 假 SMTP）', () => {
     h.clock.now += 3600_000;
     const r = await json(await request(h, 'POST', `/api/upstreams/${upstream.id}/refresh`, {}, { cookie }));
     expect(r.upstream.burnUsdPerDay).toBeCloseTo(96, 3);
+    expect(r.upstream.burnBasis).toBe('estimated');
     expect(h.sent).toHaveLength(1);
     expect(h.sent[0]!.text).toContain('约 2.0 小时后');
     expect(h.sent[0]!.text).toContain('$96.00/天');

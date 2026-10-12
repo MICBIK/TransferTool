@@ -7,13 +7,17 @@ import { alerts, upstreams } from '../db/schema.js';
 import { MASK } from './adminSettings.js';
 import type { AuditService } from './audit.js';
 import type { BalanceStore } from './balanceStore.js';
-import { BURN_WINDOW_MS, estimateBurn } from './burnRate.js';
+import { classify } from './alertMachine.js';
+import { BURN_WINDOW_MS, estimateBurn, type BurnBasis } from './burnRate.js';
 import type { Clock } from './clock.js';
 import { decrypt, encrypt } from './crypto.js';
 
 export type UpstreamRow = typeof upstreams.$inferSelect;
 export type SecretField = 'credential' | 'userId' | 'account' | 'password';
 export const SECRET_FIELDS: readonly SecretField[] = ['credential', 'userId', 'account', 'password'];
+
+/** 自动创建的上游默认提醒阈值（USD），站长可改 */
+export const DRAFT_THRESHOLD_USD = 10;
 
 /** 连续失败达到该次数后，余额标记为“未知” */
 export const UNKNOWN_AFTER_FAILURES = 3;
@@ -34,7 +38,8 @@ const shape = {
   rateFactor: z.number().finite().gt(0).max(1000),
   enabled: z.boolean(),
   note: z.string().max(500),
-  userId: z.string().trim().regex(/^\d{1,12}$/, '用户 ID 必须是数字').or(z.literal('')),
+  /** 原版 new-api 是数字，二开站点可能是字母数字编码（如 9B9YQ5），原样放进 New-Api-User 头 */
+  userId: z.string().trim().regex(/^[A-Za-z0-9_-]{1,64}$/, '用户 ID 只能包含字母、数字、- 和 _；留空即可，系统会用登录账号自动获取').or(z.literal('')),
   account: z.string().max(256),
   password: z.string().max(512),
 };
@@ -61,6 +66,8 @@ export type CreateUpstreamInput = z.infer<typeof createUpstreamSchema>;
 /** 编辑：所有字段可选；敏感字段留空或回传掩码 = 不修改。 */
 export const updateUpstreamSchema = z.strictObject({
   name: shape.name.optional(),
+  /** 改类型必须同时重新填写凭证（自动创建、还没填凭证的上游除外） */
+  type: shape.type.optional(),
   siteUrl: shape.siteUrl.optional(),
   threshold: shape.threshold.optional(),
   credential: z.string().max(2048).optional(),
@@ -84,11 +91,14 @@ export const testUpstreamSchema = z.strictObject({
   siteUrl: shape.siteUrl,
   credential: z.string().max(2048).optional(),
   userId: shape.userId.optional(),
+  account: shape.account.optional(),
+  password: shape.password.optional(),
   rateFactor: shape.rateFactor.optional(),
 });
 export type TestUpstreamInput = z.infer<typeof testUpstreamSchema>;
 
-export type UpstreamStatus = 'ok' | 'low' | 'critical' | 'unknown' | 'unsupported' | 'pending' | 'disabled';
+/** setup：根据本站渠道自动创建、等站长确认类型并填入密钥 */
+export type UpstreamStatus = 'ok' | 'low' | 'critical' | 'unknown' | 'unsupported' | 'pending' | 'disabled' | 'setup';
 
 export interface UpstreamView {
   id: number;
@@ -121,6 +131,8 @@ export interface UpstreamView {
   consecutiveFailures: number;
   burnUsdPerDay: number | null;
   exhaustAt: number | null;
+  burnBasis: BurnBasis | null;
+  needsSetup: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -164,7 +176,7 @@ export class UpstreamService {
   }
 
   private dec(field: SecretField, stored: string | null): string | undefined {
-    if (stored === null) return undefined;
+    if (stored === null || stored === '') return undefined; // '' = 自动创建的上游尚未填凭证
     return decrypt(stored, this.deps.config.encryptionKey, `upstreams.${field}`);
   }
 
@@ -241,13 +253,22 @@ export class UpstreamService {
     const changed: string[] = [];
 
     if (patch.name !== undefined) set.name = patch.name;
+    const credentialGiven = patch.credential !== undefined && patch.credential !== '' && patch.credential !== MASK;
+    if (patch.type !== undefined && patch.type !== cur.type) {
+      // 两种类型的凭证含义不同（访问令牌 vs API Key），沿用旧凭证没有意义
+      if (cur.credentialEnc !== '' && !credentialGiven) throw new UpstreamValidationError('修改了类型，请同时重新填写访问令牌 / API Key');
+      set.type = patch.type;
+    }
+    if (cur.needsSetup && credentialGiven) set.needsSetup = false;
     if (patch.siteUrl !== undefined || patch.topupUrl !== undefined) {
       const { siteUrl, topupUrl } = this.normalizeUrls(patch.siteUrl ?? cur.siteUrl, patch.topupUrl ?? cur.topupUrl ?? undefined);
       set.siteUrl = siteUrl;
       // 换了主机却沿用库里的旧凭证，等于把旧凭证发给新主机：必须同时重新填写
-      const credentialGiven = patch.credential !== undefined && patch.credential !== '' && patch.credential !== MASK;
-      if (new URL(siteUrl).host !== new URL(cur.siteUrl).host && !credentialGiven) {
-        throw new UpstreamValidationError('修改了站点域名，请同时重新填写访问令牌 / API Key');
+      if (new URL(siteUrl).host !== new URL(cur.siteUrl).host) {
+        if (!credentialGiven && cur.credentialEnc !== '') throw new UpstreamValidationError('修改了站点域名，请同时重新填写访问令牌 / API Key');
+        // 登录密码会用来自动获取用户 ID，同理不能带去新主机
+        const passwordGiven = patch.password !== undefined && patch.password !== '' && patch.password !== MASK;
+        if (cur.passwordEnc !== null && !passwordGiven) throw new UpstreamValidationError('修改了站点域名，请同时重新填写登录密码');
       }
       if (patch.topupUrl !== undefined) set.topupUrl = topupUrl;
     }
@@ -290,8 +311,46 @@ export class UpstreamService {
       siteUrl: row.siteUrl,
       credential: this.dec('credential', row.credentialEnc) ?? '',
       userId: this.dec('userId', row.userIdEnc),
+      account: this.dec('account', row.accountEnc),
+      password: this.dec('password', row.passwordEnc),
       rateFactor: row.rateFactor,
     };
+  }
+
+  /** 保存通过登录自动获取到的 new-api 用户 ID（加密），之后刷新直接使用。 */
+  saveDiscoveredUserId(id: number, userId: string): void {
+    this.deps.db.update(upstreams).set({ userIdEnc: this.enc('userId', userId) }).where(eq(upstreams.id, id)).run();
+    this.deps.audit.record('upstream.user_id_discovered', { target: `upstream:${id}` });
+  }
+
+  /**
+   * 根据本站渠道自动创建一个“待配置”的上游：没有凭证，不刷新也不提醒，
+   * 等站长确认类型并填入密钥。阈值等用默认值。
+   */
+  createDraft(input: { name: string; type: UpstreamRow['type']; siteUrl: string; domain: string }): UpstreamRow {
+    const { siteUrl } = this.normalizeUrls(input.siteUrl, undefined);
+    const now = this.deps.clock();
+    const row = this.deps.db.transaction((tx) => {
+      const inserted = tx
+        .insert(upstreams)
+        .values({
+          name: input.name.slice(0, 100),
+          type: input.type,
+          siteUrl,
+          matchDomains: JSON.stringify(cleanDomains([input.domain], siteUrl)),
+          threshold: DRAFT_THRESHOLD_USD,
+          credentialEnc: '',
+          needsSetup: true,
+          createdAt: now,
+          updatedAt: now,
+        })
+        .returning()
+        .get();
+      tx.insert(alerts).values({ upstreamId: inserted.id, state: 'normal', updatedAt: now }).run();
+      return inserted;
+    });
+    this.deps.audit.record('upstream.auto_created', { target: `upstream:${row.id}`, detail: input.domain });
+    return row;
   }
 
   /** 显式“复制”：解密后下发，并写 audit_log（不记录明文）。 */
@@ -320,11 +379,17 @@ export class UpstreamService {
     const credential = typed(input.credential) ?? (stored ? this.dec('credential', stored.credentialEnc) : undefined);
     if (!credential) throw new UpstreamValidationError('请填写访问令牌 / API Key');
     const userId = input.userId !== undefined ? input.userId || undefined : stored ? this.dec('userId', stored.userIdEnc) : undefined;
+    const sameHost = !stored || new URL(stored.siteUrl).host === new URL(siteUrl).host;
+    // 账号密码只在同一站点时才沿用库里的值，避免发往别的主机
+    const account = typed(input.account) ?? (stored && sameHost ? this.dec('account', stored.accountEnc) : undefined);
+    const password = typed(input.password) ?? (stored && sameHost ? this.dec('password', stored.passwordEnc) : undefined);
     return this.deps.adapters.fetchBalance({
       type: input.type,
       siteUrl,
       credential,
       userId,
+      account,
+      password,
       rateFactor: input.rateFactor ?? stored?.rateFactor ?? 1,
     });
   }
@@ -337,14 +402,19 @@ export class UpstreamService {
     const alert = store.getAlert(row.id) ?? { state: 'normal' as const, lastSentAt: null, lastResult: null };
 
     let status: UpstreamStatus;
-    if (!row.enabled) status = 'disabled';
+    if (row.needsSetup) status = 'setup';
+    else if (!row.enabled) status = 'disabled';
     else if (!latest) status = 'pending';
     else if (latest.mode === 'subscription') status = 'unsupported';
     else if (row.consecutiveFailures >= UNKNOWN_AFTER_FAILURES || !success) status = 'unknown';
-    else status = alert.state === 'normal' ? 'ok' : alert.state;
+    else {
+      // 按最新余额直接判定，不依赖提醒状态（SMTP 未配置、发信失败时提醒状态不会更新）
+      const level = success.balanceUsd === null ? alert.state : classify(success.balanceUsd, row.threshold, row.emergencyThreshold);
+      status = level === 'normal' ? 'ok' : level;
+    }
 
     const showBalance = success && status !== 'unknown' && status !== 'unsupported';
-    const burn = showBalance ? estimateBurn(store.points(row.id, now - BURN_WINDOW_MS), now) : { usdPerDay: null, exhaustAt: null };
+    const burn = showBalance ? estimateBurn(store.points(row.id, now - BURN_WINDOW_MS), now) : null;
     return {
       id: row.id,
       name: row.name,
@@ -376,8 +446,11 @@ export class UpstreamService {
       lastSuccessAt: success?.ts ?? null,
       lastError: latest && !latest.ok ? latest.error : null,
       consecutiveFailures: row.consecutiveFailures,
-      burnUsdPerDay: burn.usdPerDay,
-      exhaustAt: burn.exhaustAt,
+      burnUsdPerDay: burn?.usdPerDay ?? null,
+      exhaustAt: burn?.exhaustAt ?? null,
+      /** 无法估算时的原因，便于前端给出“还要等多久” */
+      burnBasis: burn?.basis ?? null,
+      needsSetup: row.needsSetup,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

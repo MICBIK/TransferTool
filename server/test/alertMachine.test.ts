@@ -89,10 +89,11 @@ describe('消耗速度估算', () => {
     expect(e.exhaustAt).toBeCloseTo(now + (107 / 24) * 24 * H, -2);
   });
   it('只有上升/持平、样本太少或跨度过短：无法估算', () => {
-    expect(estimateBurn([{ ts: NOW - H, balanceUsd: 1 }, { ts: NOW, balanceUsd: 5 }], NOW)).toEqual({ usdPerDay: null, exhaustAt: null });
-    expect(estimateBurn([{ ts: NOW - H, balanceUsd: 5 }, { ts: NOW, balanceUsd: 5 }], NOW).usdPerDay).toBeNull();
-    expect(estimateBurn([{ ts: NOW, balanceUsd: 5 }], NOW).usdPerDay).toBeNull();
-    expect(estimateBurn([{ ts: NOW - 60_000, balanceUsd: 6 }, { ts: NOW, balanceUsd: 5 }], NOW).usdPerDay).toBeNull();
+    expect(estimateBurn([{ ts: NOW - H, balanceUsd: 1 }, { ts: NOW, balanceUsd: 5 }], NOW)).toEqual({ basis: 'collecting', usdPerDay: null, exhaustAt: null });
+    expect(estimateBurn([{ ts: NOW - H, balanceUsd: 5 }, { ts: NOW, balanceUsd: 5 }], NOW)).toEqual({ basis: 'no_usage', usdPerDay: null, exhaustAt: null });
+    expect(estimateBurn([{ ts: NOW, balanceUsd: 5 }], NOW).basis).toBe('collecting');
+    expect(estimateBurn([{ ts: NOW - 60_000, balanceUsd: 6 }, { ts: NOW, balanceUsd: 5 }], NOW).basis).toBe('collecting');
+    expect(estimateBurn([{ ts: NOW - H, balanceUsd: 6 }, { ts: NOW, balanceUsd: 5 }], NOW).basis).toBe('estimated');
   });
   it('只看最近 24 小时', () => {
     const e = estimateBurn(

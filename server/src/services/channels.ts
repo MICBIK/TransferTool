@@ -4,10 +4,12 @@ import type { ChannelStatus, ChannelTestResult, OwnSiteClient, SiteErrorKind, St
 import type { Db } from '../db/client.js';
 import { channels } from '../db/schema.js';
 import type { AuditService } from './audit.js';
-import { classifyChannel } from './channelClassifier.js';
+import { baseDomain, classifyChannel, hostOf, suggestUpstreams } from './channelClassifier.js';
 import type { Clock } from './clock.js';
 import type { OwnSiteService } from './ownSite.js';
+import type { SettingsStore } from './settings.js';
 import { parseDomains, type UpstreamService } from './upstreams.js';
+import type { UpstreamType } from '../adapters/index.js';
 
 export const SITE_ID = 1;
 export const SYNC_INTERVAL_MS = 5 * 60_000;
@@ -56,6 +58,8 @@ export interface SyncSummary {
   added: number;
   removed: number;
   syncedAt: number | null;
+  /** 本次根据未归类渠道自动创建的“待配置”上游数 */
+  autoCreated: number;
 }
 
 export interface StatusChangeResult extends StatusManyResult {
@@ -92,6 +96,9 @@ export class ChannelService {
       upstreams: UpstreamService;
       audit: AuditService;
       clock: Clock;
+      settings: SettingsStore;
+      /** 猜测自动创建上游的类型（new-api / sub2api），站长仍需确认 */
+      detectType: (siteUrl: string, signal: AbortSignal) => Promise<UpstreamType>;
     },
   ) {}
 
@@ -180,12 +187,53 @@ export class ChannelService {
 
   /** 从本站拉取全部渠道并写入缓存；失败时缓存原样保留（不会因一次失败而清空）。 */
   sync(): Promise<SyncSummary> {
-    return this.exclusive(() => this.doSync());
+    return this.exclusive(async () => {
+      const r = await this.doSync();
+      if (r.ok && !this.abort.signal.aborted) r.autoCreated = await this.autoCreateUpstreams();
+      return r;
+    });
+  }
+
+  /** 站长删过的上游域名：之后不再自动创建。 */
+  ignoredDomains(): string[] {
+    return parseDomains(this.deps.settings.get('ignored_upstream_domains') ?? '[]');
+  }
+
+  ignoreDomains(domains: string[]): void {
+    const next = new Set([...this.ignoredDomains(), ...domains.map((d) => baseDomain(d))]);
+    this.deps.settings.set('ignored_upstream_domains', JSON.stringify([...next].sort()));
+  }
+
+  /**
+   * 未归类的渠道按主域名分组，每组自动建一个“待配置”上游（猜测类型，没有凭证），然后重新归类。
+   * 跳过：本站自己的域名、站长删过的域名、已有上游覆盖的主域名。
+   */
+  private async autoCreateUpstreams(): Promise<number> {
+    const ownHost = hostOf(this.deps.ownSite.connection()?.siteUrl ?? '');
+    const skip = new Set(this.ignoredDomains());
+    if (ownHost) skip.add(baseDomain(ownHost));
+    for (const u of this.deps.upstreams.list()) for (const d of parseDomains(u.matchDomains)) skip.add(baseDomain(d));
+
+    const todo = suggestUpstreams(this.rows().filter((r) => r.upstreamId === null)).filter((sg) => !skip.has(sg.domain));
+    if (todo.length === 0) return 0;
+    const types = await Promise.all(todo.map((sg) => this.deps.detectType(sg.siteUrl, this.abort.signal)));
+    if (this.abort.signal.aborted) return 0;
+    let created = 0;
+    todo.forEach((sg, i) => {
+      try {
+        this.deps.upstreams.createDraft({ name: sg.domain.split('.')[0] || sg.domain, type: types[i]!, siteUrl: sg.siteUrl, domain: sg.domain });
+        created++;
+      } catch {
+        // 地址不合法（如内网 IP 被拒）等：跳过该组，留给站长手动处理
+      }
+    });
+    if (created > 0) this.classifyAll();
+    return created;
   }
 
   private async doSync(): Promise<SyncSummary> {
     const { db, clock } = this.deps;
-    const summary = (over: Partial<SyncSummary>): SyncSummary => ({ ok: false, error: null, total: this.rows().length, added: 0, removed: 0, syncedAt: this.lastSyncAt, ...over });
+    const summary = (over: Partial<SyncSummary>): SyncSummary => ({ ok: false, error: null, total: this.rows().length, added: 0, removed: 0, syncedAt: this.lastSyncAt, autoCreated: 0, ...over });
     const conn = this.deps.ownSite.connection();
     if (!conn) return summary({ error: '尚未配置本站地址与访问令牌' });
     if (this.abort.signal.aborted) return summary({ error: '服务正在关闭' });
@@ -242,23 +290,25 @@ export class ChannelService {
     });
     this.lastSyncAt = now;
     this.lastError = null;
-    return { ok: true, error: null, total: res.channels.length, added, removed, syncedAt: now };
+    return { ok: true, error: null, total: res.channels.length, added, removed, syncedAt: now, autoCreated: 0 };
   }
 
   /** 上游新增/修改匹配域名后立即重新归类（不访问本站）；手动指定的不动。 */
   reclassify(): Promise<void> {
-    return this.exclusive(() => {
-      const domains = this.domainsTable();
-      this.deps.db.transaction((tx) => {
-        for (const r of tx.select().from(channels).where(eq(channels.siteId, SITE_ID)).all()) {
-          // 手动指定且上游仍在的不动；上游已被删除（外键置空）的退回自动归类
-          if (r.manualUpstream && r.upstreamId !== null) continue;
-          const upstreamId = classifyChannel(r.baseUrl, domains);
-          if (upstreamId !== r.upstreamId || r.manualUpstream) {
-            tx.update(channels).set({ upstreamId, manualUpstream: false }).where(and(eq(channels.siteId, SITE_ID), eq(channels.channelId, r.channelId))).run();
-          }
+    return this.exclusive(() => this.classifyAll());
+  }
+
+  private classifyAll(): void {
+    const domains = this.domainsTable();
+    this.deps.db.transaction((tx) => {
+      for (const r of tx.select().from(channels).where(eq(channels.siteId, SITE_ID)).all()) {
+        // 手动指定且上游仍在的不动；上游已被删除（外键置空）的退回自动归类
+        if (r.manualUpstream && r.upstreamId !== null) continue;
+        const upstreamId = classifyChannel(r.baseUrl, domains);
+        if (upstreamId !== r.upstreamId || r.manualUpstream) {
+          tx.update(channels).set({ upstreamId, manualUpstream: false }).where(and(eq(channels.siteId, SITE_ID), eq(channels.channelId, r.channelId))).run();
         }
-      });
+      }
     });
   }
 

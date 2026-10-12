@@ -32,6 +32,8 @@ export interface SyncResult {
   total: number;
   added: number;
   removed: number;
+  /** 根据未归类渠道自动创建的“待配置”上游数 */
+  autoCreated: number;
 }
 
 export interface StatusResult {

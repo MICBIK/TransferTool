@@ -20,8 +20,11 @@ import HealthNotices from '../components/HealthNotices.vue';
 import HealthTag from '../components/HealthTag.vue';
 import { getHealth, latency, pct, type ChannelHealth, type HealthOverview } from '../health';
 import { formatAgo, listUpstreams, type Upstream } from '../upstreams';
+import { useNarrow } from '../narrow';
 
 const message = useMessage();
+// 手机上不固定右侧列，否则会挡住大半个表格
+const narrow = useNarrow();
 const dialog = useDialog();
 
 const listing = ref<ChannelListing | null>(null);
@@ -41,7 +44,6 @@ let timer: ReturnType<typeof setInterval> | undefined;
 const filters = ref<{ upstream: string | null; group: string | null; status: number | null; keyword: string }>({ upstream: null, group: null, status: null, keyword: '' });
 
 const errorText = (err: unknown) => (err instanceof ApiError ? err.message : '网络错误，请稍后重试');
-const upstreamName = (id: number | null) => upstreams.value.find((u) => u.id === id)?.name ?? '（已删除）';
 
 const channels = computed(() => listing.value?.channels ?? []);
 const upstreamOptions = computed(() => [
@@ -102,7 +104,10 @@ async function onSync() {
     const r = await syncChannels();
     apply(r);
     upstreams.value = await listUpstreams();
-    if (r.result.ok) message.success(`已同步 ${r.result.total} 个渠道${r.result.removed ? `，移除 ${r.result.removed} 个已在本站删除的渠道` : ''}`);
+    if (r.result.ok)
+      message.success(
+        `已同步 ${r.result.total} 个渠道${r.result.removed ? `，移除 ${r.result.removed} 个已在本站删除的渠道` : ''}${r.result.autoCreated ? `，自动创建 ${r.result.autoCreated} 个待配置上游，请到总览填入密钥` : ''}`,
+      );
     else message.error(r.result.error ?? '同步失败');
   } catch (err) {
     message.error(errorText(err));
@@ -186,7 +191,7 @@ function confirmBatch(enable: boolean) {
 
 const columns = computed<DataTableColumns<Channel>>(() => [
   { type: 'selection' },
-  { title: 'ID', key: 'id', width: 70 },
+  { title: 'ID', key: 'id', width: 56 },
   {
     title: '名称',
     key: 'name',
@@ -200,24 +205,24 @@ const columns = computed<DataTableColumns<Channel>>(() => [
   {
     title: '上游',
     key: 'upstreamId',
-    minWidth: 170,
-    render: (c) => {
-      if (c.upstreamId === null) {
-        return h(NSelect, {
+    width: 190,
+    render: (c) =>
+      h('div', { style: 'display:flex;align-items:center;gap:4px' }, [
+        h(NSelect, {
           size: 'small',
+          value: c.upstreamId,
           placeholder: '未归类，点此指定',
           options: assignOptions.value,
           disabled: busy.value.has(c.id) || assignOptions.value.length === 0,
+          consistentMenuWidth: false,
+          style: 'flex:1;min-width:0',
           onUpdateValue: (v: number) => void onAssign(c, v),
-        });
-      }
-      return h(NSpace, { size: 4, align: 'center', wrapItem: false }, () => [
-        h(RouterLink, { to: `/upstreams/${c.upstreamId}` }, { default: () => upstreamName(c.upstreamId) }),
+        }),
+        c.upstreamId !== null ? h(RouterLink, { to: `/upstreams/${c.upstreamId}`, title: '打开该上游', style: 'text-decoration:none' }, { default: () => '↗' }) : null,
         c.manualUpstream
           ? h(NButton, { size: 'tiny', quaternary: true, title: '取消手动指定，恢复按域名自动归类', onClick: () => void onAssign(c, null) }, { default: () => '手动 ×' })
           : null,
-      ]);
-    },
+      ]),
   },
   {
     title: '分组',
@@ -240,35 +245,43 @@ const columns = computed<DataTableColumns<Channel>>(() => [
   {
     title: '健康',
     key: 'health',
-    minWidth: 190,
+    width: 150,
     render: (c) => {
       const hh: ChannelHealth | undefined = healthById.value.get(c.id);
       if (!hh) return h(NText, { depth: 3 }, { default: () => '—' });
       if (hh.status === 'idle') {
         return h('div', [
           h(HealthTag, { status: hh.status, title: '近 1 小时没有请求' }),
-          h(NText, { depth: 3, style: 'display:block;font-size:12px' }, { default: () => `24h ${pct(hh.successRate24h)} · 最近成功 ${hh.lastSuccessAt ? formatAgo(hh.lastSuccessAt, now.value) : '无'}` }),
+          hh.requests24h > 0
+            ? h(NText, { depth: 3, style: 'display:block;font-size:12px' }, { default: () => `24h ${pct(hh.successRate24h)} · 最近成功 ${hh.lastSuccessAt ? formatAgo(hh.lastSuccessAt, now.value) : '无'}` })
+            : null,
         ]);
       }
-      return h('div', { style: 'font-size:12px;line-height:1.6' }, [
-        h(HealthTag, { status: hh.status, title: `近 1 小时 ${hh.requests1h - hh.errors1h}/${hh.requests1h} 次成功` }),
-        h('div', `成功率 1h ${pct(hh.successRate1h)} · 24h ${pct(hh.successRate24h)}`),
-        h(NText, { depth: 3 }, { default: () => `均耗时 ${latency(hh.avgLatencyMs1h ?? hh.avgLatencyMs24h)} · 最近成功 ${hh.lastSuccessAt ? formatAgo(hh.lastSuccessAt, now.value) : '无'}` }),
+      return h('div', { style: 'font-size:12px;line-height:1.6', title: `近 1 小时 ${hh.requests1h - hh.errors1h}/${hh.requests1h} 次成功；最近成功 ${hh.lastSuccessAt ? formatAgo(hh.lastSuccessAt, now.value) : '无'}` }, [
+        h(HealthTag, { status: hh.status }),
+        h('div', `1h ${pct(hh.successRate1h)} · 24h ${pct(hh.successRate24h)}`),
+        h(NText, { depth: 3 }, { default: () => `均耗时 ${latency(hh.avgLatencyMs1h ?? hh.avgLatencyMs24h)}` }),
       ]);
     },
   },
-  { title: '优先级/权重', key: 'priority', width: 110, render: (c) => `${c.priority} / ${c.weight}` },
-  { title: '响应', key: 'responseTimeMs', width: 80, render: (c) => (c.responseTimeMs > 0 ? `${c.responseTimeMs} ms` : '—') },
+  {
+    title: '优先级/权重',
+    key: 'priority',
+    width: 100,
+    render: (c) => h('div', { style: 'font-size:12px;line-height:1.6' }, [h('div', `${c.priority} / ${c.weight}`), h(NText, { depth: 3 }, { default: () => (c.responseTimeMs > 0 ? `${c.responseTimeMs} ms` : '') })]),
+  },
   {
     title: '启用',
     key: 'switch',
-    width: 70,
+    width: 64,
+    fixed: narrow.value ? undefined : 'right',
     render: (c) => h(NSwitch, { value: c.status === 1, loading: busy.value.has(c.id), onUpdateValue: (v: boolean) => void onToggle(c, v) }),
   },
   {
     title: '测试',
     key: 'test',
-    minWidth: 150,
+    width: 130,
+    fixed: narrow.value ? undefined : 'right',
     render: (c) => {
       const r = testResults.value[c.id];
       return h('div', [
@@ -331,7 +344,7 @@ onBeforeUnmount(() => clearInterval(timer));
         :checked-row-keys="checked"
         @update:checked-row-keys="(keys: Array<string | number>) => (checked = keys as number[])"
         :pagination="{ pageSize: 50 }"
-        :scroll-x="1200"
+        :scroll-x="1080"
         size="small"
       />
     </template>

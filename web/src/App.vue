@@ -3,7 +3,7 @@ import { NConfigProvider, NDialogProvider, NMessageProvider, dateZhCN, zhCN } fr
 </script>
 
 <template>
-  <n-config-provider :locale="zhCN" :date-locale="dateZhCN">
+  <n-config-provider abstract :locale="zhCN" :date-locale="dateZhCN">
     <n-dialog-provider>
       <n-message-provider>
         <router-view />

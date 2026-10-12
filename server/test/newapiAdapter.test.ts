@@ -79,6 +79,45 @@ describe('new-api 适配器', () => {
     expect(t.calls).toHaveLength(2);
   });
 
+  it('站点要求 New-Api-User 而未填用户 ID：用登录账号自动获取并回传；没有账号时提示填写', async () => {
+    const needId = () => jsonRes({ success: false, message: 'Unauthorized, New-Api-User header not provided' }, 401);
+    const noId = { ...base, userId: undefined };
+    const t0 = setup(needId);
+    expect(await t0.adapters.fetchBalance(noId)).toMatchObject({ ok: false, error: '该站点需要用户 ID：在上游配置里填写该站的登录账号和密码，即可自动获取' });
+
+    const t = setup((c) => {
+      if (c.url.endsWith('/api/status')) return status(500_000);
+      if (c.url.endsWith('/api/user/login')) {
+        const body = JSON.parse(c.body ?? "{}") as { username: string; password: string };
+        return body.username === 'me' && body.password === 'pw-secret' ? jsonRes({ success: true, data: { id: 77, username: 'me' } }) : jsonRes({ success: false, message: '用户名或密码错误' });
+      }
+      return c.headers['new-api-user'] === '77' ? okSelf(1_000_000) : needId();
+    });
+    const r = await t.adapters.fetchBalance({ ...noId, account: 'me', password: 'pw-secret' });
+    expect(r).toMatchObject({ ok: true, balanceUsd: 2, discoveredUserId: '77' });
+    expect(t.calls.find((c) => c.url.endsWith('/api/user/login'))!.url).toBe(`${SITE}/api/user/login`);
+
+    const bad = await t.adapters.fetchBalance({ ...noId, account: 'me', password: 'wrong' });
+    expect(bad.ok).toBe(false);
+    expect(bad.error).toContain('用户名或密码错误');
+
+    const t2 = setup((c) => (c.url.endsWith('/api/user/login') ? jsonRes({ success: true, data: { require_2fa: true } }) : needId()));
+    expect((await t2.adapters.fetchBalance({ ...noId, account: 'me', password: 'pw' })).error).toContain('两步验证');
+
+    // 二开站点：登录返回字符串 ID，原样放进 New-Api-User
+    const t4 = setup((c) => {
+      if (c.url.endsWith('/api/status')) return status(500_000);
+      if (c.url.endsWith('/api/user/login')) return jsonRes({ success: true, data: { id: '9B9YQ5' } });
+      return c.headers['new-api-user'] === '9B9YQ5' ? okSelf(500_000) : needId();
+    });
+    expect(await t4.adapters.fetchBalance({ ...noId, account: 'me', password: 'pw' })).toMatchObject({ ok: true, balanceUsd: 1, discoveredUserId: '9B9YQ5' });
+
+    // 已填了用户 ID 仍被拒：不登录，保留原始信息
+    const t3 = setup(() => jsonRes({ success: false, message: 'New-Api-User mismatch' }, 401));
+    expect((await t3.adapters.fetchBalance({ ...base, account: 'me', password: 'pw' })).error).toContain('mismatch');
+    expect(t3.calls.some((c) => c.url.endsWith('/api/user/login'))).toBe(false);
+  });
+
   it('旧令牌已停用：给出重新生成提示（HTTP 200 或 401 都识别）', async () => {
     const body = { success: false, code: 'ACCESS_TOKEN_LEGACY_RETIRED', message: 'legacy token retired' };
     for (const httpStatus of [200, 401]) {
