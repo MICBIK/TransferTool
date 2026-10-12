@@ -97,9 +97,16 @@ onBeforeUnmount(() => clearInterval(timer));
       根据本站渠道自动创建了 {{ setupCount }} 个上游（标为“待配置”）。到对应上游站点生成访问令牌（new-api）或 API Key（sub2api），点卡片上的「填入密钥」粘贴进去，并确认类型是否正确。不需要的上游直接删除即可，之后不会再自动创建。
     </n-alert>
 
-    <n-empty v-if="upstreams.length === 0" description="还没有上游。添加一个 new-api / sub2api 上游后，这里会显示余额与消耗速度。" style="margin-top: 60px">
+    <n-empty
+      v-if="upstreams.length === 0"
+      :description="channelsConfigured ? '还没有上游。本站渠道里没有可识别的上游域名，可以手动添加 new-api / sub2api 上游。' : '还没有上游。先在「设置 → 本站连接」连上你的 new-api，同步渠道后会按域名自动创建上游；也可以手动添加。'"
+      style="margin-top: 60px"
+    >
       <template #extra>
-        <router-link to="/upstreams/new" custom v-slot="{ navigate }"><n-button type="primary" @click="navigate">添加上游</n-button></router-link>
+        <n-space justify="center">
+          <router-link v-if="!channelsConfigured" to="/settings#site" custom v-slot="{ navigate }"><n-button type="primary" @click="navigate">去连接本站</n-button></router-link>
+          <router-link to="/upstreams/new" custom v-slot="{ navigate }"><n-button :type="channelsConfigured ? 'primary' : 'default'" @click="navigate">手动添加上游</n-button></router-link>
+        </n-space>
       </template>
     </n-empty>
 

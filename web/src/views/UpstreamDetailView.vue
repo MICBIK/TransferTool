@@ -72,7 +72,10 @@ function openConfig() {
 }
 
 async function onSaved(u: Upstream) {
+  const wasSetup = upstream.value?.needsSetup === true;
   upstream.value = u;
+  // 刚填完密钥：切到概览看余额
+  if (wasSetup && !u.needsSetup) tab.value = 'overview';
   await loadHistory();
 }
 

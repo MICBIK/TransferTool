@@ -22,4 +22,6 @@ export async function refreshSession(): Promise<void> {
 export async function logout(): Promise<void> {
   await api('/api/auth/logout', { method: 'POST', body: {} }).catch(() => undefined);
   session.authenticated = false;
+  // 登录方式可能刚在设置里改过：重新取一次，登录页才会显示对的页签
+  await refreshSession().catch(() => undefined);
 }

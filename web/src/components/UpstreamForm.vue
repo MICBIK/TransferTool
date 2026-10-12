@@ -2,9 +2,12 @@
 import { computed, reactive, ref, watch } from 'vue';
 import { NAlert, NButton, NCollapse, NCollapseItem, NDynamicTags, NText, NForm, NFormItem, NInput, NInputNumber, NSpace, NSwitch, NRadioButton, NRadioGroup, useMessage } from 'naive-ui';
 import { api, ApiError } from '../api';
+import { useNarrow } from '../narrow';
 import { copySecret, usd, type SecretField, type TestResult, type Upstream, type UpstreamType } from '../upstreams';
 
 const props = defineProps<{ upstream?: Upstream }>();
+// 手机上标签放在输入框上方，输入框占满宽度
+const narrow = useNarrow();
 const emit = defineEmits<{ saved: [Upstream] }>();
 const message = useMessage();
 
@@ -143,7 +146,14 @@ async function save() {
     const res = props.upstream
       ? await api<{ upstream: Upstream }>(`/api/upstreams/${props.upstream.id}`, { method: 'PUT', body: { ...common, type: form.type } })
       : await api<{ upstream: Upstream }>('/api/upstreams', { body: { ...common, type: form.type } });
-    message.success(editing.value ? '已保存' : '已添加');
+    // 填了凭证会立即刷新一次：直接告诉站长结果，不用再去找
+    const u = res.upstream;
+    const fresh = form.credential.trim() !== '';
+    if (fresh && u.lastError) message.warning(`已保存，但查询余额失败：${u.lastError}`, { duration: 8000 });
+    else if (fresh && u.balanceUsd !== null) message.success(`${editing.value ? '已保存' : '已添加'}，当前余额 ${usd(u.balanceUsd)}`);
+    else message.success(editing.value ? '已保存' : '已添加');
+    form.credential = '';
+    form.password = '';
     testResult.value = null;
     emit('saved', res.upstream);
   } catch (err) {
@@ -155,7 +165,7 @@ async function save() {
 </script>
 
 <template>
-  <n-form label-placement="left" label-width="110" style="max-width: 720px">
+  <n-form :label-placement="narrow ? 'top' : 'left'" label-width="110" style="max-width: 720px">
     <n-alert v-if="upstream?.needsSetup" type="info" :show-icon="false" style="margin-bottom: 16px">
       这个上游是根据本站渠道自动创建的。请确认类型，然后到
       <a :href="upstream.siteUrl" target="_blank" rel="noopener noreferrer">{{ upstream.siteUrl }}</a>
@@ -172,27 +182,27 @@ async function save() {
     </n-form-item>
     <n-form-item label="站点地址"><n-input v-model:value="form.siteUrl" placeholder="https://api.example.com" /></n-form-item>
     <n-form-item :label="credentialLabel">
-      <n-space :wrap="false" style="width: 100%">
-        <n-input v-model:value="form.credential" type="password" show-password-on="click" autocomplete="off" :placeholder="secretPlaceholder('credential')" style="min-width: 360px" />
+      <div style="display: flex; gap: 8px; width: 100%">
+        <n-input v-model:value="form.credential" type="password" show-password-on="click" autocomplete="off" :placeholder="secretPlaceholder('credential')" :style="narrow ? 'flex: 1; min-width: 0' : 'max-width: 420px; flex: 1'" />
         <n-button v-if="upstream?.secrets.credential.set" secondary @click="copy('credential')">复制已存值</n-button>
-      </n-space>
+      </div>
     </n-form-item>
     <n-form-item label="账号（可选）">
-      <n-space :wrap="false">
-        <n-input v-model:value="form.account" autocomplete="off" :placeholder="secretPlaceholder('account') || '上游站点的登录用户名'" style="width: 320px" />
+      <div style="display: flex; gap: 8px; width: 100%">
+        <n-input v-model:value="form.account" autocomplete="off" :placeholder="secretPlaceholder('account') || '上游站点的登录用户名'" :style="narrow ? 'flex: 1; min-width: 0' : 'max-width: 320px; flex: 1'" />
         <n-button v-if="upstream?.secrets.account.set" secondary @click="copy('account')">复制</n-button>
-      </n-space>
+      </div>
     </n-form-item>
     <n-form-item label="密码（可选）">
-      <n-space :wrap="false">
-        <n-input v-model:value="form.password" type="password" show-password-on="click" autocomplete="new-password" :placeholder="secretPlaceholder('password')" style="width: 320px" />
+      <div style="display: flex; gap: 8px; width: 100%">
+        <n-input v-model:value="form.password" type="password" show-password-on="click" autocomplete="new-password" :placeholder="secretPlaceholder('password')" :style="narrow ? 'flex: 1; min-width: 0' : 'max-width: 320px; flex: 1'" />
         <n-button v-if="upstream?.secrets.password.set" secondary @click="copy('password')">复制</n-button>
-      </n-space>
+      </div>
       <template #feedback>
         方便充值时复制登录。<template v-if="form.type === 'newapi'">新版 new-api 查余额需要用户 ID，填了账号密码会自动登录一次获取，不用手动找。</template>
       </template>
     </n-form-item>
-    <n-collapse v-if="form.type === 'newapi'" style="margin: 4px 0 18px 110px; max-width: 610px">
+    <n-collapse v-if="form.type === 'newapi'" :style="narrow ? 'margin: 0 0 18px' : 'margin: 4px 0 18px 110px; max-width: 610px'">
       <n-collapse-item title="高级：手动指定用户 ID" name="userId">
         <n-space :wrap="false" align="center">
           <n-input v-model:value="form.userId" autocomplete="off" placeholder="留空则自动获取" :style="{ width: '240px' }" />

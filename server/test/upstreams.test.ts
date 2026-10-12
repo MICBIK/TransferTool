@@ -105,12 +105,19 @@ describe('上游接口', () => {
       return c.headers['new-api-user'] === '31' ? jsonRes({ success: true, data: { quota: 2_500_000 } }) : jsonRes({ success: false, message: 'New-Api-User header not provided' }, 401);
     };
     const res = await json(await request(h, 'POST', '/api/upstreams', { ...NEW, userId: '' }, { cookie }));
-    expect(res.upstream).toMatchObject({ status: 'ok', balanceUsd: 5 });
+    expect(res.upstream).toMatchObject({ status: 'low', balanceUsd: 5 }); // 低于阈值 10
     expect(res.upstream.secrets.userId.set).toBe(true);
     const row = h.db.select().from(upstreams).get()!;
     expect(row.userIdEnc).toMatch(/^enc:v1:/);
     await request(h, 'POST', `/api/upstreams/${res.upstream.id}/refresh`, {}, { cookie });
     expect(logins).toBe(1);
+  });
+
+  it('状态按最新余额判定：没配 SMTP（提醒发不出去）时低于阈值也显示余额不足', async () => {
+    const { h, cookie } = await setup();
+    fakeNewApi(h, { usd: 1 });
+    const { upstream } = await json(await request(h, 'POST', '/api/upstreams', NEW, { cookie }));
+    expect(upstream).toMatchObject({ status: 'critical', balanceUsd: 1 }); // 紧急阈值 2
   });
 
   it('手动填写的用户 ID 接受二开站点的字母数字编码，拒绝其他字符', async () => {

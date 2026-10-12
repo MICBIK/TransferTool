@@ -7,6 +7,7 @@ import { alerts, upstreams } from '../db/schema.js';
 import { MASK } from './adminSettings.js';
 import type { AuditService } from './audit.js';
 import type { BalanceStore } from './balanceStore.js';
+import { classify } from './alertMachine.js';
 import { BURN_WINDOW_MS, estimateBurn, type BurnBasis } from './burnRate.js';
 import type { Clock } from './clock.js';
 import { decrypt, encrypt } from './crypto.js';
@@ -406,7 +407,11 @@ export class UpstreamService {
     else if (!latest) status = 'pending';
     else if (latest.mode === 'subscription') status = 'unsupported';
     else if (row.consecutiveFailures >= UNKNOWN_AFTER_FAILURES || !success) status = 'unknown';
-    else status = alert.state === 'normal' ? 'ok' : alert.state;
+    else {
+      // 按最新余额直接判定，不依赖提醒状态（SMTP 未配置、发信失败时提醒状态不会更新）
+      const level = success.balanceUsd === null ? alert.state : classify(success.balanceUsd, row.threshold, row.emergencyThreshold);
+      status = level === 'normal' ? 'ok' : level;
+    }
 
     const showBalance = success && status !== 'unknown' && status !== 'unsupported';
     const burn = showBalance ? estimateBurn(store.points(row.id, now - BURN_WINDOW_MS), now) : null;

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
   NAlert,
   NButton,
@@ -11,6 +12,8 @@ import {
   NRadio,
   NSpace,
   NSwitch,
+  NTabPane,
+  NTabs,
   useMessage,
 } from 'naive-ui';
 import { api, ApiError } from '../api';
@@ -248,120 +251,138 @@ async function sendTest() {
   }
 }
 
+/** 页签与地址栏 #hash 同步，刷新后停在原页签 */
+const route = useRoute();
+const router = useRouter();
+const TABS = ['site', 'mail', 'alerts', 'account'];
+const tab = computed<string>({
+  get: () => (TABS.includes(route.hash.slice(1)) ? route.hash.slice(1) : 'site'),
+  set: (t) => void router.replace({ hash: `#${t}` }),
+});
+
 onMounted(() => void load().catch((err) => message.error(errorText(err))));
 </script>
 
 <template>
-  <n-space v-if="loaded" vertical :size="24" style="max-width: 720px">
-    <n-card title="修改密码">
-      <n-form label-placement="left" label-width="90">
-        <n-form-item label="当前密码">
-          <n-input v-model:value="pwd.current" type="password" show-password-on="click" autocomplete="current-password" />
-        </n-form-item>
-        <n-form-item label="新密码">
-          <n-input v-model:value="pwd.next" type="password" show-password-on="click" placeholder="至少 8 位" autocomplete="new-password" />
-        </n-form-item>
-        <n-form-item label="确认新密码">
-          <n-input v-model:value="pwd.confirm" type="password" show-password-on="click" autocomplete="new-password" />
-        </n-form-item>
-        <n-button type="primary" :loading="busy.password" :disabled="!pwd.current || !pwd.next" @click="changePassword">修改密码</n-button>
-      </n-form>
-    </n-card>
-
-    <n-card title="登录方式">
-      <n-space vertical :size="12">
-        <n-radio :checked="state.loginMethod === 'password'" @update:checked="state.loginMethod = 'password'">仅密码</n-radio>
-        <n-radio :checked="state.loginMethod === 'email_code'" :disabled="!state.smtpVerified" @update:checked="state.loginMethod = 'email_code'">
-          仅邮件验证码
-        </n-radio>
-        <n-radio :checked="state.loginMethod === 'both'" :disabled="!state.smtpVerified" @update:checked="state.loginMethod = 'both'">
-          密码或邮件验证码
-        </n-radio>
-        <n-alert v-if="!state.smtpVerified" type="info" :show-icon="false">需先在下方配置 SMTP 与站长邮箱，并成功发送测试邮件后，才能启用验证码登录。</n-alert>
-        <n-alert v-if="state.loginMethod !== 'password'" type="warning" :show-icon="false">
-          {{ state.emergencyPasswordConfigured ? '已配置紧急密码，SMTP 故障时仍可用它登录。' : '未配置 EMERGENCY_PASSWORD：SMTP 故障时将无法登录，建议先在环境变量中配置紧急密码。' }}
-        </n-alert>
-        <div><n-button type="primary" :loading="busy.method" @click="saveMethod">保存登录方式</n-button></div>
-      </n-space>
-    </n-card>
-
-    <n-card title="邮件（SMTP）与站长邮箱">
-      <n-form label-placement="left" label-width="90">
-        <n-form-item label="站长邮箱">
-          <n-input v-model:value="state.adminEmail" placeholder="验证码与提醒都发到这里" />
-        </n-form-item>
-        <n-form-item label="SMTP 主机"><n-input v-model:value="state.smtp.host" placeholder="smtp.example.com" /></n-form-item>
-        <n-form-item label="端口"><n-input-number v-model:value="state.smtp.port" :min="1" :max="65535" :show-button="false" /></n-form-item>
-        <n-form-item label="SSL/TLS"><n-switch v-model:value="state.smtp.secure" /><span style="margin-left: 12px; opacity: 0.7">465 端口开启，587 端口（STARTTLS）关闭</span></n-form-item>
-        <n-form-item label="用户名"><n-input v-model:value="state.smtp.user" autocomplete="off" /></n-form-item>
-        <n-form-item label="密码">
-          <n-input v-model:value="state.smtp.pass" type="password" show-password-on="click" autocomplete="new-password" :placeholder="state.smtp.passSet ? '已设置，留空表示不修改' : ''" />
-        </n-form-item>
-        <n-form-item label="发件人">
-          <n-input v-model:value="state.smtp.from" placeholder="TransferTool &lt;noreply@example.com&gt;" />
-          <template #feedback>域名需在 SMTP 服务商处验证过（如 Resend 要求发件域名已验证）</template>
-        </n-form-item>
-        <n-space align="center">
-          <n-button type="primary" :loading="busy.smtp" @click="onSaveSmtp">保存</n-button>
-          <n-button :loading="busy.test" :disabled="testBlocker !== ''" @click="sendTest">保存并发送测试邮件</n-button>
-          <span v-if="state.smtpVerified" style="color: var(--n-success-color, #18a058)">已验证</span>
-          <span v-else-if="testBlocker" style="opacity: 0.7">{{ testBlocker }}</span>
+  <div v-if="loaded" style="max-width: 760px">
+    <n-tabs v-model:value="tab" type="line" animated>
+      <n-tab-pane name="site" tab="本站连接">
+        <n-card title="本站（new-api）连接">
+          <n-form label-placement="left" label-width="90">
+            <n-form-item label="本站地址"><n-input v-model:value="own.url" placeholder="https://your-site.example.com" /></n-form-item>
+            <n-form-item label="访问令牌">
+              <n-input v-model:value="own.token" type="password" show-password-on="click" autocomplete="new-password" :placeholder="own.tokenSet ? '已设置，留空表示不修改' : '本站的访问令牌'" />
+            </n-form-item>
+            <n-form-item label="用户 ID">
+              <n-input v-model:value="own.userId" autocomplete="off" :placeholder="own.userIdSet ? '已设置，留空表示不修改' : '可选；旧版本站需要（New-Api-User）'" style="max-width: 280px" />
+              <n-button v-if="own.userIdSet" style="margin-left: 8px" size="small" :disabled="ownBusy.save" @click="saveOwn(true)">清除</n-button>
+            </n-form-item>
+            <n-alert type="info" :show-icon="false" style="margin-bottom: 16px">
+              建议使用带范围的令牌，只授予：渠道读取、渠道操作、log:read。权限不足时，“测试连接”或操作会提示缺少的具体权限。本工具只读取渠道的基本信息，不会请求或保存渠道密钥（key）。
+            </n-alert>
+            <n-space align="center">
+              <n-button type="primary" :loading="ownBusy.save" @click="saveOwn()">保存</n-button>
+              <n-button :loading="ownBusy.test" :disabled="!own.url.trim() || (!own.tokenSet && !own.token)" @click="testOwn">测试连接</n-button>
+              <n-button v-if="own.configured" quaternary type="error" :disabled="ownBusy.save" @click="disconnectOwn">断开本站</n-button>
+            </n-space>
+            <n-alert v-if="ownTest" :type="ownTest.ok ? 'success' : 'error'" :show-icon="false" style="margin-top: 12px">{{ ownTest.text }}</n-alert>
+          </n-form>
+        </n-card>
+      </n-tab-pane>
+      <n-tab-pane name="mail" tab="邮件与登录">
+        <n-space vertical :size="20">
+            <n-card title="邮件（SMTP）与站长邮箱">
+              <n-form label-placement="left" label-width="90">
+                <n-form-item label="站长邮箱">
+                  <n-input v-model:value="state.adminEmail" placeholder="验证码与提醒都发到这里" />
+                </n-form-item>
+                <n-form-item label="SMTP 主机"><n-input v-model:value="state.smtp.host" placeholder="smtp.example.com" /></n-form-item>
+                <n-form-item label="端口"><n-input-number v-model:value="state.smtp.port" :min="1" :max="65535" :show-button="false" /></n-form-item>
+                <n-form-item label="SSL/TLS"><n-switch v-model:value="state.smtp.secure" /><span style="margin-left: 12px; opacity: 0.7">465 端口开启，587 端口（STARTTLS）关闭</span></n-form-item>
+                <n-form-item label="用户名"><n-input v-model:value="state.smtp.user" autocomplete="off" /></n-form-item>
+                <n-form-item label="密码">
+                  <n-input v-model:value="state.smtp.pass" type="password" show-password-on="click" autocomplete="new-password" :placeholder="state.smtp.passSet ? '已设置，留空表示不修改' : ''" />
+                </n-form-item>
+                <n-form-item label="发件人">
+                  <n-input v-model:value="state.smtp.from" placeholder="TransferTool &lt;noreply@example.com&gt;" />
+                  <template #feedback>域名需在 SMTP 服务商处验证过（如 Resend 要求发件域名已验证）</template>
+                </n-form-item>
+                <n-space align="center">
+                  <n-button type="primary" :loading="busy.smtp" @click="onSaveSmtp">保存</n-button>
+                  <n-button :loading="busy.test" :disabled="testBlocker !== ''" @click="sendTest">保存并发送测试邮件</n-button>
+                  <span v-if="state.smtpVerified" style="color: var(--n-success-color, #18a058)">已验证</span>
+                  <span v-else-if="testBlocker" style="opacity: 0.7">{{ testBlocker }}</span>
+                </n-space>
+              </n-form>
+            </n-card>
+            <n-card title="登录方式">
+              <n-space vertical :size="12">
+                <n-radio :checked="state.loginMethod === 'password'" @update:checked="state.loginMethod = 'password'">仅密码</n-radio>
+                <n-radio :checked="state.loginMethod === 'email_code'" :disabled="!state.smtpVerified" @update:checked="state.loginMethod = 'email_code'">
+                  仅邮件验证码
+                </n-radio>
+                <n-radio :checked="state.loginMethod === 'both'" :disabled="!state.smtpVerified" @update:checked="state.loginMethod = 'both'">
+                  密码或邮件验证码
+                </n-radio>
+                <n-alert v-if="!state.smtpVerified" type="info" :show-icon="false">需先在上方配置 SMTP 与站长邮箱，并成功发送测试邮件后，才能启用验证码登录。</n-alert>
+                <n-alert v-if="state.loginMethod !== 'password'" type="warning" :show-icon="false">
+                  {{ state.emergencyPasswordConfigured ? '已配置紧急密码，SMTP 故障时仍可用它登录。' : '未配置 EMERGENCY_PASSWORD：SMTP 故障时将无法登录，建议先在环境变量中配置紧急密码。' }}
+                </n-alert>
+                <div><n-button type="primary" :loading="busy.method" @click="saveMethod">保存登录方式</n-button></div>
+              </n-space>
+            </n-card>
         </n-space>
-      </n-form>
-    </n-card>
-
-    <n-card title="本站（new-api）连接">
-      <n-form label-placement="left" label-width="90">
-        <n-form-item label="本站地址"><n-input v-model:value="own.url" placeholder="https://your-site.example.com" /></n-form-item>
-        <n-form-item label="访问令牌">
-          <n-input v-model:value="own.token" type="password" show-password-on="click" autocomplete="new-password" :placeholder="own.tokenSet ? '已设置，留空表示不修改' : '本站的访问令牌'" />
-        </n-form-item>
-        <n-form-item label="用户 ID">
-          <n-input v-model:value="own.userId" autocomplete="off" :placeholder="own.userIdSet ? '已设置，留空表示不修改' : '可选；旧版本站需要（New-Api-User）'" style="max-width: 280px" />
-          <n-button v-if="own.userIdSet" style="margin-left: 8px" size="small" :disabled="ownBusy.save" @click="saveOwn(true)">清除</n-button>
-        </n-form-item>
-        <n-alert type="info" :show-icon="false" style="margin-bottom: 16px">
-          建议使用带范围的令牌，只授予：渠道读取、渠道操作、log:read。权限不足时，“测试连接”或操作会提示缺少的具体权限。本工具只读取渠道的基本信息，不会请求或保存渠道密钥（key）。
-        </n-alert>
-        <n-space align="center">
-          <n-button type="primary" :loading="ownBusy.save" @click="saveOwn()">保存</n-button>
-          <n-button :loading="ownBusy.test" :disabled="!own.url.trim() || (!own.tokenSet && !own.token)" @click="testOwn">测试连接</n-button>
-          <n-button v-if="own.configured" quaternary type="error" :disabled="ownBusy.save" @click="disconnectOwn">断开本站</n-button>
+      </n-tab-pane>
+      <n-tab-pane name="alerts" tab="提醒与健康">
+        <n-space vertical :size="20">
+            <n-card title="余额提醒">
+              <n-form label-placement="left" label-width="120">
+                <n-form-item label="重复提醒间隔">
+                  <n-input-number v-model:value="state.alertRepeatHours" :min="1" :max="168" :precision="0" style="width: 140px" />
+                  <span style="margin-left: 12px">小时（持续低于阈值时，最多每隔这么久再提醒一次；紧急阈值跌破立即发送，同一状态只发一次）</span>
+                </n-form-item>
+                <n-form-item label="余额归零自动停渠道">
+                  <n-switch v-model:value="state.autoDisableAtZero" />
+                  <span style="margin-left: 12px; opacity: 0.7">默认关闭。打开后，上游余额（查询成功时）≤ 0 会批量停用该上游当前启用的渠道，并记录哪些是本工具停的；余额回升到 0 以上时只恢复这些渠道。需先配置本站连接，所有动作写入审计日志。</span>
+                </n-form-item>
+                <n-alert v-if="!state.smtpVerified" type="info" :show-icon="false" style="margin-bottom: 16px">提醒邮件使用「邮件与登录」里的 SMTP 与站长邮箱，请先在那里发送测试邮件验证。</n-alert>
+                <n-button type="primary" :loading="busy.alerts" @click="saveAlerts">保存提醒设置</n-button>
+              </n-form>
+            </n-card>
+            <n-card title="渠道健康">
+              <n-form label-placement="left" label-width="120">
+                <n-form-item label="“正常”成功率">
+                  <n-input-number v-model:value="state.healthOkRate" :min="2" :max="100" :precision="0" style="width: 140px" />
+                  <span style="margin-left: 12px">% 及以上（近 1 小时成功率）</span>
+                </n-form-item>
+                <n-form-item label="“降级”成功率">
+                  <n-input-number v-model:value="state.healthDegradedRate" :min="1" :max="99" :precision="0" style="width: 140px" />
+                  <span style="margin-left: 12px">% 及以上为降级，低于此值为异常；近 30 分钟有请求却没有一次成功也判为异常；近 1 小时没有请求为空闲</span>
+                </n-form-item>
+                <n-alert type="info" :show-icon="false" style="margin-bottom: 16px">
+                  健康数据来自本站的使用日志与错误日志（令牌需要 log:read 权限，本站需开启错误日志记录）。本工具每 5 分钟拉取一次并只保存聚合结果（保留 30 天），不保存原始日志。
+                </n-alert>
+                <n-button type="primary" :loading="busy.health" @click="saveHealth">保存健康阈值</n-button>
+              </n-form>
+            </n-card>
         </n-space>
-        <n-alert v-if="ownTest" :type="ownTest.ok ? 'success' : 'error'" :show-icon="false" style="margin-top: 12px">{{ ownTest.text }}</n-alert>
-      </n-form>
-    </n-card>
-
-    <n-card title="余额提醒">
-      <n-form label-placement="left" label-width="120">
-        <n-form-item label="重复提醒间隔">
-          <n-input-number v-model:value="state.alertRepeatHours" :min="1" :max="168" :precision="0" style="width: 140px" />
-          <span style="margin-left: 12px">小时（持续低于阈值时，最多每隔这么久再提醒一次；紧急阈值跌破立即发送，同一状态只发一次）</span>
-        </n-form-item>
-        <n-form-item label="余额归零自动停渠道">
-          <n-switch v-model:value="state.autoDisableAtZero" />
-          <span style="margin-left: 12px; opacity: 0.7">默认关闭。打开后，上游余额（查询成功时）≤ 0 会批量停用该上游当前启用的渠道，并记录哪些是本工具停的；余额回升到 0 以上时只恢复这些渠道。需先配置上方本站连接，所有动作写入审计日志。</span>
-        </n-form-item>
-        <n-alert v-if="!state.smtpVerified" type="info" :show-icon="false" style="margin-bottom: 16px">提醒邮件使用上方的 SMTP 与站长邮箱，请先发送测试邮件验证。</n-alert>
-        <n-button type="primary" :loading="busy.alerts" @click="saveAlerts">保存提醒设置</n-button>
-      </n-form>
-    </n-card>
-
-    <n-card title="渠道健康">
-      <n-form label-placement="left" label-width="120">
-        <n-form-item label="“正常”成功率">
-          <n-input-number v-model:value="state.healthOkRate" :min="2" :max="100" :precision="0" style="width: 140px" />
-          <span style="margin-left: 12px">% 及以上（近 1 小时成功率）</span>
-        </n-form-item>
-        <n-form-item label="“降级”成功率">
-          <n-input-number v-model:value="state.healthDegradedRate" :min="1" :max="99" :precision="0" style="width: 140px" />
-          <span style="margin-left: 12px">% 及以上为降级，低于此值为异常；近 30 分钟有请求却没有一次成功也判为异常；近 1 小时没有请求为空闲</span>
-        </n-form-item>
-        <n-alert type="info" :show-icon="false" style="margin-bottom: 16px">
-          健康数据来自本站的使用日志与错误日志（令牌需要 log:read 权限，本站需开启错误日志记录）。本工具每 5 分钟拉取一次并只保存聚合结果（保留 30 天），不保存原始日志。
-        </n-alert>
-        <n-button type="primary" :loading="busy.health" @click="saveHealth">保存健康阈值</n-button>
-      </n-form>
-    </n-card>
-  </n-space>
+      </n-tab-pane>
+      <n-tab-pane name="account" tab="修改密码">
+        <n-card title="修改密码">
+          <n-form label-placement="left" label-width="90">
+            <n-form-item label="当前密码">
+              <n-input v-model:value="pwd.current" type="password" show-password-on="click" autocomplete="current-password" />
+            </n-form-item>
+            <n-form-item label="新密码">
+              <n-input v-model:value="pwd.next" type="password" show-password-on="click" placeholder="至少 8 位" autocomplete="new-password" />
+            </n-form-item>
+            <n-form-item label="确认新密码">
+              <n-input v-model:value="pwd.confirm" type="password" show-password-on="click" autocomplete="new-password" />
+            </n-form-item>
+            <n-button type="primary" :loading="busy.password" :disabled="!pwd.current || !pwd.next" @click="changePassword">修改密码</n-button>
+          </n-form>
+        </n-card>
+      </n-tab-pane>
+    </n-tabs>
+  </div>
 </template>

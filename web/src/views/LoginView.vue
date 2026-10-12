@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NSpace, NTabPane, NTabs, useMessage } from 'naive-ui';
 import { api, ApiError } from '../api';
@@ -18,6 +18,13 @@ const error = ref('');
 let timer: ReturnType<typeof setInterval> | undefined;
 
 const codeValid = computed(() => /^\d{6}$/.test(code.value));
+
+// 以服务端当前的登录方式为准（可能刚被修改过）
+onMounted(async () => {
+  await refreshSession().catch(() => undefined);
+  if (!session.methods.password) tab.value = 'code';
+  else if (!session.methods.emailCode) tab.value = 'password';
+});
 
 function describe(err: unknown): string {
   if (err instanceof ApiError) {

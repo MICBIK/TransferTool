@@ -93,7 +93,7 @@ export function formatEta(exhaustAt: number | null, now = Date.now()): string {
 /** 消耗速度文案：估算不出来时说明原因，数据不够时给出大约还要等多久。 */
 export function burnText(u: Upstream, now = Date.now()): string {
   if (u.burnBasis === 'estimated' && u.burnUsdPerDay !== null) return `${usd(u.burnUsdPerDay)}/天`;
-  if (u.burnBasis === 'no_usage') return '近 24 小时无消耗';
+  if (u.burnBasis === 'no_usage') return '暂无消耗（余额未下降）';
   if (u.burnBasis === 'collecting') {
     // 至少需要两次成功刷新、相隔 5 分钟以上，且期间余额有下降
     const next = u.lastSuccessAt === null ? null : u.lastSuccessAt + Math.max(u.intervalMinutes, 5) * 60_000;
