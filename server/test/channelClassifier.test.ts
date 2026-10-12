@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { classifyChannel, hostOf } from '../src/services/channelClassifier.js';
+import { baseDomain, classifyChannel, hostOf } from '../src/services/channelClassifier.js';
 
 const ups = [
   { id: 1, domains: ['api.up-a.com'] },
@@ -42,5 +42,18 @@ describe('渠道自动归类', () => {
     const ip = [{ id: 9, domains: ['1.2.3.4'] }];
     expect(classifyChannel('http://1.2.3.4:3000', ip)).toBe(9);
     expect(classifyChannel('http://11.2.3.4', ip)).toBeNull();
+  });
+});
+
+describe('主域名', () => {
+  it('取最后两段；常见两段式后缀取三段；IP 与短主机名原样返回', () => {
+    expect(baseDomain('api.llmgw.xyz')).toBe('llmgw.xyz');
+    expect(baseDomain('8yes.cc')).toBe('8yes.cc');
+    expect(baseDomain('a.b.C.example.com.')).toBe('example.com');
+    expect(baseDomain('2api.jrsgslb.cn')).toBe('jrsgslb.cn');
+    expect(baseDomain('api.foo.com.cn')).toBe('foo.com.cn');
+    expect(baseDomain('x.foo.co.uk')).toBe('foo.co.uk');
+    expect(baseDomain('10.0.0.5')).toBe('10.0.0.5');
+    expect(baseDomain('localhost')).toBe('localhost');
   });
 });

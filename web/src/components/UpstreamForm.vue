@@ -4,7 +4,8 @@ import { NAlert, NButton, NDynamicTags, NForm, NFormItem, NInput, NInputNumber, 
 import { api, ApiError } from '../api';
 import { copySecret, usd, type SecretField, type TestResult, type Upstream, type UpstreamType } from '../upstreams';
 
-const props = defineProps<{ upstream?: Upstream }>();
+/** prefill：新建时预填（来自“发现上游”的建议） */
+const props = defineProps<{ upstream?: Upstream; prefill?: { name?: string; siteUrl?: string; matchDomains?: string[] } }>();
 const emit = defineEmits<{ saved: [Upstream] }>();
 const message = useMessage();
 
@@ -66,6 +67,12 @@ function fill(u: Upstream) {
   });
 }
 watch(() => props.upstream, (u) => u && fill(u), { immediate: true });
+if (!props.upstream && props.prefill) {
+  const p = props.prefill;
+  if (p.name) form.name = p.name;
+  if (p.siteUrl) form.siteUrl = p.siteUrl;
+  if (p.matchDomains?.length) form.matchDomains = [...p.matchDomains];
+}
 
 const busy = reactive({ save: false, test: false });
 const testResult = ref<TestResult | null>(null);

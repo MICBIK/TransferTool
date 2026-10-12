@@ -117,6 +117,38 @@ describe('渠道同步与归类', () => {
     expect(sum.summary).toEqual(expect.arrayContaining([{ upstreamId: a.id, enabled: 2, total: 2 }, { upstreamId: null, enabled: 3, total: 3 }]));
   });
 
+  it('未归类渠道按主域名分组给出上游建议；按建议添加上游后这些渠道自动归类', async () => {
+    const { h, cookie, site } = await setup();
+    const a = addUpstream(h, 'a.example.com');
+    site.state.channels = [
+      ch(1, 'https://a.example.com'),
+      ch(2, 'https://api.llmgw.xyz'),
+      ch(3, 'https://api.llmgw.xyz/v1', { status: 2 }),
+      ch(4, 'https://llmgw.xyz'),
+      ch(5, 'https://8yes.cc'),
+      ch(6, ''),
+    ];
+    wire(h, site, {});
+    await connect(h, cookie);
+    expect((await request(h, 'GET', '/api/channels/upstream-suggestions')).status).toBe(401);
+
+    const res = await json(await request(h, 'GET', '/api/channels/upstream-suggestions', undefined, { cookie }));
+    expect(res.suggestions).toEqual([
+      { domain: 'llmgw.xyz', siteUrl: 'https://api.llmgw.xyz', hosts: ['api.llmgw.xyz', 'llmgw.xyz'], channelCount: 3, enabledCount: 2, sampleNames: ['渠道2', '渠道3', '渠道4'] },
+      { domain: '8yes.cc', siteUrl: 'https://8yes.cc', hosts: ['8yes.cc'], channelCount: 1, enabledCount: 1, sampleNames: ['渠道5'] },
+    ]);
+    expect(JSON.stringify(res)).not.toContain('a.example.com');
+
+    // 按建议添加（匹配域名取主域名），子域名渠道一并归类，建议随之消失
+    const created = await request(h, 'POST', '/api/upstreams', { name: 'llmgw', type: 'newapi', siteUrl: 'https://api.llmgw.xyz', credential: 'tok', threshold: 5, matchDomains: ['llmgw.xyz'] }, { cookie });
+    expect(created.status).toBe(201);
+    const id = (await json(created)).upstream.id;
+    expect([2, 3, 4].map((c) => h.s.channels.find(c)?.upstreamId)).toEqual([id, id, id]);
+    expect(h.s.channels.find(1)?.upstreamId).toBe(a.id);
+    const after = await json(await request(h, 'GET', '/api/channels/upstream-suggestions', undefined, { cookie }));
+    expect(after.suggestions.map((x: { domain: string }) => x.domain)).toEqual(['8yes.cc']);
+  });
+
   it('手动指定优先且不被同步覆盖；取消手动后恢复自动归类；上游新增匹配域名后立即重归类', async () => {
     const { h, cookie, site } = await setup();
     const a = addUpstream(h, 'a.example.com');

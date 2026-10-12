@@ -4,7 +4,7 @@ import type { ChannelStatus, ChannelTestResult, OwnSiteClient, SiteErrorKind, St
 import type { Db } from '../db/client.js';
 import { channels } from '../db/schema.js';
 import type { AuditService } from './audit.js';
-import { classifyChannel } from './channelClassifier.js';
+import { classifyChannel, suggestUpstreams, type UpstreamSuggestion } from './channelClassifier.js';
 import type { Clock } from './clock.js';
 import type { OwnSiteService } from './ownSite.js';
 import { parseDomains, type UpstreamService } from './upstreams.js';
@@ -170,6 +170,11 @@ export class ChannelService {
       acc.set(r.upstreamId, e);
     }
     return [...acc].map(([upstreamId, v]) => ({ upstreamId, ...v }));
+  }
+
+  /** 未归类渠道按主域名分组，给出可一键添加的上游建议。 */
+  upstreamSuggestions(): UpstreamSuggestion[] {
+    return suggestUpstreams(this.rows().filter((r) => r.upstreamId === null));
   }
 
   // ---- 同步与归类 ----

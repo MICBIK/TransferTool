@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
-import { NButton, NCard, NEmpty, NGrid, NGridItem, NSpace, NTag, NText, useMessage } from 'naive-ui';
+import { NButton, NCard, NEmpty, NGrid, NGridItem, NSpace, NTable, NTag, NText, useMessage } from 'naive-ui';
 import { ApiError } from '../api';
-import { channelSummary, type ChannelCount } from '../channels';
+import { channelSummary, upstreamSuggestions, type ChannelCount, type UpstreamSuggestion } from '../channels';
 import HealthNotices from '../components/HealthNotices.vue';
 import HealthTag from '../components/HealthTag.vue';
 import { getHealth, type HealthOverview, type UpstreamRollup } from '../health';
@@ -15,6 +15,13 @@ const loaded = ref(false);
 const counts = ref<Map<number | null, ChannelCount>>(new Map());
 const channelsConfigured = ref(false);
 const health = ref<HealthOverview | null>(null);
+const suggestions = ref<UpstreamSuggestion[]>([]);
+const unclassified = computed(() => counts.value.get(null)?.total ?? 0);
+
+/** 跳到“添加上游”并预填站点、名称和匹配域名 */
+function addFromSuggestion(sg: UpstreamSuggestion) {
+  return { path: '/upstreams/new', query: { siteUrl: sg.siteUrl, name: sg.domain.split('.')[0], domain: sg.domain } };
+}
 const rollups = computed(() => new Map<number, UpstreamRollup>((health.value?.upstreams ?? []).map((r) => [r.upstreamId, r])));
 const refreshing = ref<Set<number> | 'all'>(new Set());
 const now = ref(Date.now());
@@ -35,6 +42,7 @@ async function load() {
       channelsConfigured.value = s.configured;
       counts.value = new Map(s.summary.map((c) => [c.upstreamId, c]));
       health.value = await getHealth().catch(() => health.value);
+      suggestions.value = s.configured ? ((await upstreamSuggestions().catch(() => null))?.suggestions ?? suggestions.value) : [];
     }
   } catch (err) {
     if (!loaded.value) message.error(errorText(err));
@@ -91,6 +99,30 @@ onBeforeUnmount(() => clearInterval(timer));
     </n-space>
 
     <health-notices :health="health" />
+
+    <n-card v-if="suggestions.length > 0" size="small" :title="`从本站渠道发现 ${suggestions.length} 个尚未添加的上游`">
+      <n-text depth="3" style="font-size: 13px">
+        本站有 {{ unclassified }} 个渠道还没有归属上游，下面按域名分好了组。点「添加」会预填站点地址和匹配域名，选好类型并填写访问令牌或 API Key 后保存，这些渠道就会自动归类。
+      </n-text>
+      <n-table size="small" :bordered="false" style="margin-top: 8px">
+        <thead>
+          <tr><th>域名</th><th>渠道</th><th>示例</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="sg in suggestions" :key="sg.domain">
+            <td>
+              <div style="font-weight: 600">{{ sg.domain }}</div>
+              <n-text v-if="sg.hosts.length > 1 || sg.hosts[0] !== sg.domain" depth="3" style="font-size: 12px">{{ sg.hosts.join('、') }}</n-text>
+            </td>
+            <td style="white-space: nowrap">启用 {{ sg.enabledCount }} / 共 {{ sg.channelCount }}</td>
+            <td><n-text depth="3" style="font-size: 12px">{{ sg.sampleNames.join('、') }}{{ sg.channelCount > sg.sampleNames.length ? ' 等' : '' }}</n-text></td>
+            <td style="text-align: right">
+              <router-link :to="addFromSuggestion(sg)" custom v-slot="{ navigate }"><n-button size="small" type="primary" secondary @click="navigate">添加</n-button></router-link>
+            </td>
+          </tr>
+        </tbody>
+      </n-table>
+    </n-card>
 
     <n-empty v-if="upstreams.length === 0" description="还没有上游。添加一个 new-api / sub2api 上游后，这里会显示余额与消耗速度。" style="margin-top: 60px">
       <template #extra>
