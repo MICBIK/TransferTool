@@ -38,6 +38,15 @@ export function parseKeyRemaining(body: Record<string, unknown>): number | undef
   return undefined;
 }
 
+/** quota_limited 的 Key 限额与已用（用于界面说明“为什么不是账户余额”）；取不到为 undefined */
+export function parseKeyQuota(body: Record<string, unknown>): { limit?: number; used?: number } {
+  const quota = asRecord(body.quota);
+  return {
+    limit: asNumber(quota?.limit ?? quota?.total ?? body.quota_limit ?? body.limit ?? body.total_quota),
+    used: asNumber(quota?.used ?? body.quota_used ?? body.used ?? body.used_quota),
+  };
+}
+
 export function createSub2ApiAdapter(deps: AdapterDeps): Adapter {
   return {
     async fetchBalance(upstream, ctx) {
@@ -72,8 +81,24 @@ export function createSub2ApiAdapter(deps: AdapterDeps): Adapter {
         }
         if (mode === 'quota_limited') {
           const remaining = parseKeyRemaining(body);
-          if (remaining === undefined) return FAIL('无法从响应中解析该 Key 的剩余额度，余额未知', mode);
-          return { ok: true, balanceUsd: remaining * upstream.rateFactor, mode, kind: 'key_limit', raw: { mode, remaining } };
+          if (remaining === undefined) {
+            // sub2api 在 Key 只设了速率限制（5h/1d/7d）而没设总额度时也返回 quota_limited，此时不带任何余额
+            const limited = Array.isArray(body.rate_limits) && body.rate_limits.length > 0;
+            return FAIL(
+              limited
+                ? '这个 Key 设置了速率限制，sub2api 不会返回账户余额。请在上游新建一个不限额度、不限速率的 Key 填进来'
+                : '无法从响应中解析该 Key 的剩余额度，余额未知',
+              mode,
+            );
+          }
+          const { limit, used } = parseKeyQuota(body);
+          return {
+            ok: true,
+            balanceUsd: remaining * upstream.rateFactor,
+            mode,
+            kind: 'key_limit',
+            raw: { mode, remaining, ...(limit !== undefined ? { limit } : {}), ...(used !== undefined ? { used } : {}) },
+          };
         }
         return FAIL(mode ? `暂不支持的 sub2api 模式：${safeMessage(mode, secrets, 40)}` : '上游响应缺少 mode 字段，请确认这是 sub2api 站点');
       } catch (err) {

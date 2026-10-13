@@ -27,7 +27,7 @@ import {
 } from '../dashboard';
 import { getHealth, type HealthOverview, type UpstreamRollup } from '../health';
 import { useNarrow } from '../narrow';
-import { STATUS_META, burnText, etaSpan, formatAgo, listUpstreams, refreshAll, usd, type Upstream } from '../upstreams';
+import { STATUS_META, statusLabel, burnText, etaSpan, formatAgo, listUpstreams, refreshAll, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
 const narrow = useNarrow();
@@ -141,8 +141,8 @@ const issues = computed<Issue[]>(() => {
       out.push({
         key: `bal-${u.id}`,
         level: u.status === 'critical' ? 'error' : 'warning',
-        tag: STATUS_META[u.status].label,
-        text: `${u.name}：余额 ${usd(u.balanceUsd)}，低于阈值 ${usd(u.status === 'critical' && u.emergencyThreshold !== null ? u.emergencyThreshold : u.threshold)}${eta}`,
+        tag: statusLabel(u),
+        text: `${u.name}：${u.balanceKind === 'key_limit' ? 'Key 剩余额度' : '余额'} ${usd(u.balanceUsd)}，低于阈值 ${usd(u.status === 'critical' && u.emergencyThreshold !== null ? u.emergencyThreshold : u.threshold)}${eta}`,
         action: u.effectiveTopupUrl ? { label: '去充值', href: u.effectiveTopupUrl } : { label: '查看', to: `/upstreams/${u.id}` },
       });
     } else if (u.status === 'unknown') {
@@ -350,7 +350,7 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
         h(RouterLink, { to: `/upstreams/${u.id}`, style: 'color:inherit;font-weight:500' }, { default: () => u.name }),
       ]),
   },
-  { title: '状态', key: 'status', width: 96, render: (u) => h(NTag, { size: 'small', type: STATUS_META[u.status].tag, bordered: false }, { default: () => STATUS_META[u.status].label }) },
+  { title: '状态', key: 'status', width: 96, render: (u) => h(NTag, { size: 'small', type: STATUS_META[u.status].tag, bordered: false }, { default: () => statusLabel(u) }) },
   { title: '余额', key: 'balance', width: 90, align: 'right', render: (u) => h('span', { style: 'font-variant-numeric:tabular-nums' }, u.status === 'unsupported' ? '—' : usd(u.balanceUsd)) },
   { title: '消耗速度', key: 'burn', width: 110, render: (u) => h(NText, { depth: u.burnBasis === 'estimated' ? 1 : 3, style: 'font-size:13px' }, { default: () => burnText(u, now.value) }) },
   {

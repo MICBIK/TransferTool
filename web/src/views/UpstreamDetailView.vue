@@ -9,7 +9,7 @@ import StatTile from '../components/StatTile.vue';
 import { getUpstreamHealth, pct, type HealthStatus } from '../health';
 import UpstreamChannels from '../components/UpstreamChannels.vue';
 import UpstreamForm from '../components/UpstreamForm.vue';
-import { STATUS_META, TYPE_LABEL, burnText, etaSpan, formatAgo, shortTime, getHistory, getUpstream, refreshOne, usd, type HistoryPoint, type Upstream } from '../upstreams';
+import { KEY_LIMIT_HINT, STATUS_META, keyQuotaText, statusLabel, TYPE_LABEL, burnText, etaSpan, formatAgo, shortTime, getHistory, getUpstream, refreshOne, usd, type HistoryPoint, type Upstream } from '../upstreams';
 
 const route = useRoute();
 const router = useRouter();
@@ -146,7 +146,7 @@ onMounted(() => void load());
         <router-link to="/upstreams" custom v-slot="{ navigate }"><n-button quaternary size="small" @click="navigate">← 上游</n-button></router-link>
         <span style="font-size: 18px; font-weight: 600">{{ upstream.name }}</span>
         <n-tag size="small" :bordered="false">{{ TYPE_LABEL[upstream.type] }}</n-tag>
-        <n-tag size="small" :type="STATUS_META[upstream.status].tag">{{ STATUS_META[upstream.status].label }}</n-tag>
+        <n-tag size="small" :type="STATUS_META[upstream.status].tag">{{ statusLabel(upstream) }}</n-tag>
       </n-space>
       <n-space>
         <n-button v-if="upstream.effectiveTopupUrl" type="primary" secondary tag="a" :href="upstream.effectiveTopupUrl" target="_blank" rel="noopener noreferrer">充值</n-button>
@@ -165,12 +165,16 @@ onMounted(() => void load());
             {{ upstream.lastError }}
             <n-button text type="primary" style="margin-left: 8px" @click="openConfig">去修改配置</n-button>
           </n-alert>
+          <n-alert v-else-if="upstream.balanceKind === 'key_limit'" type="warning" :show-icon="false">
+            {{ KEY_LIMIT_HINT }}
+            <n-button text type="primary" style="margin-left: 8px" @click="openConfig">去换 Key</n-button>
+          </n-alert>
 
           <n-grid cols="2 760:4" :x-gap="12" :y-gap="12">
             <n-grid-item>
               <stat-tile :label="upstream.balanceKind === 'key_limit' ? 'Key 剩余额度' : '余额'" :value="balanceValue" :color="STATUS_META[upstream.status].color">
                 阈值 {{ usd(upstream.threshold) }}<template v-if="upstream.emergencyThreshold !== null">，紧急 {{ usd(upstream.emergencyThreshold) }}</template>
-                <template v-if="upstream.balanceKind === 'key_limit'"><br /><n-text type="warning" style="font-size: 12px">这是 Key 限额，不是钱包余额</n-text></template>
+                <template v-if="upstream.balanceKind === 'key_limit'"><br /><n-text type="warning" style="font-size: 12px">{{ keyQuotaText(upstream) ?? '这是 Key 限额' }}，不是账户余额</n-text></template>
               </stat-tile>
             </n-grid-item>
             <n-grid-item>
