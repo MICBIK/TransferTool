@@ -53,6 +53,11 @@ describe('渠道健康 API', () => {
     expect(by[1].successRate1h).toBeCloseTo(0.98);
     expect(by[1].successRate24h).toBeCloseTo(0.74);
     expect(by[1].lastSuccessAt).toBeGreaterThan(0);
+    // 状态条：24 格每小时，最近的在最后
+    expect(by[1].hourly).toHaveLength(24);
+    expect(by[1].hourly.reduce((n: number, c: { requests: number }) => n + c.requests, 0)).toBe(200);
+    expect(by[1].hourly.at(-1)).toEqual({ requests: 100, errors: 2 });
+    expect(by[5].hourly.every((c: { requests: number }) => c.requests === 0)).toBe(true);
     expect(by[2].status).toBe('degraded');
     expect(by[3].status).toBe('down');
     expect(by[4].status).toBe('down');

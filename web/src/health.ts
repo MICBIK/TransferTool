@@ -17,6 +17,13 @@ export interface ChannelHealth {
   avgLatencyMs1h: number | null;
   avgLatencyMs24h: number | null;
   lastSuccessAt: number | null;
+  /** 仅总览接口返回：近 24 小时每小时一格，最早在前 */
+  hourly?: HourCell[];
+}
+
+export interface HourCell {
+  requests: number;
+  errors: number;
 }
 
 export interface TrendPoint {
@@ -72,6 +79,9 @@ export const HEALTH_META: Record<HealthStatus, { label: string; tag: 'success' |
   down: { label: '异常', tag: 'error', color: '#d03050' },
   idle: { label: '空闲', tag: 'default', color: '#909399' },
 };
+
+/** 渠道排序用：异常 > 降级 > 正常 > 空闲 */
+export const HEALTH_RANK: Record<HealthStatus, number> = { down: 0, degraded: 1, healthy: 2, idle: 3 };
 
 export const pct = (rate: number | null): string => (rate === null ? '—' : `${(rate * 100).toFixed(rate === 1 || rate === 0 ? 0 : 1)}%`);
 export const latency = (ms: number | null): string => (ms === null ? '—' : ms >= 10_000 ? `${(ms / 1000).toFixed(0)} s` : ms >= 1000 ? `${(ms / 1000).toFixed(1)} s` : `${ms} ms`);

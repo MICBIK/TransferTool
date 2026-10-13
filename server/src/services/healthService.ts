@@ -45,6 +45,12 @@ export interface ChannelDetail extends ChannelHealthView {
   errors: ErrorSample[];
 }
 
+/** 总览用：近 24 小时每小时一格的请求与错误数（最早在前），画状态条 */
+export interface HourCell {
+  requests: number;
+  errors: number;
+}
+
 export interface UpstreamHealthView extends UpstreamRollup {
   upstreamId: number;
 }
@@ -82,10 +88,11 @@ export class HealthService {
     }));
   }
 
-  overview(): { ingest: IngestStatus; missingErrorLogs: boolean; thresholds: HealthThresholds; channels: ChannelHealthView[]; upstreams: UpstreamHealthView[] } {
+  overview(): { ingest: IngestStatus; missingErrorLogs: boolean; thresholds: HealthThresholds; channels: (ChannelHealthView & { hourly: HourCell[] })[]; upstreams: UpstreamHealthView[] } {
     const now = this.deps.clock();
     const { buckets, thresholds } = this.load(now);
     const views = this.channelViews(now, buckets, thresholds);
+    const hourly = (id: number): HourCell[] => computeTrend(buckets.get(id) ?? [], now, 24, 60).map((p) => ({ requests: p.requests, errors: p.errors }));
     // 近 24 小时有消费日志、却一条错误日志都没有入库：多半是本站没开错误日志记录（仅提示，不当作故障）
     const since = now - DAY_MS;
     let requests = 0;
@@ -102,7 +109,7 @@ export class HealthService {
       ingest: this.deps.ingestor.status(),
       missingErrorLogs: requests > 0 && errors === 0,
       thresholds,
-      channels: views,
+      channels: views.map((v) => ({ ...v, hourly: hourly(v.channelId) })),
       upstreams: this.rollups(views),
     };
   }
