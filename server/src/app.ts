@@ -5,6 +5,7 @@ import { apiError } from './http.js';
 import { requireAuth } from './middleware/auth.js';
 import { authRoutes } from './routes/auth.js';
 import { channelRoutes } from './routes/channels.js';
+import { dashboardRoutes } from './routes/dashboard.js';
 import { healthRoutes } from './routes/health.js';
 import { settingsRoutes } from './routes/settings.js';
 import { upstreamRoutes } from './routes/upstreams.js';
@@ -54,6 +55,7 @@ export function createApp(s: Services): Hono {
   app.route('/api/upstreams', upstreamRoutes(s));
   app.route('/api/channels', channelRoutes(s));
   app.route('/api/health', healthRoutes(s));
+  app.route('/api/dashboard', dashboardRoutes(s));
 
   app.all('/api/*', (c) => apiError(c, 404, 'not_found', '接口不存在'));
 

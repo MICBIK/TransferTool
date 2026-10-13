@@ -112,7 +112,7 @@ async function saveOwn(clearUserId = false) {
     applyOwn(v);
     ownTest.value = null;
     if (v.sync && !v.sync.ok) message.warning(`已保存，但首次同步渠道失败：${v.sync.error ?? ''}`, { duration: 8000 });
-    else message.success(v.sync ? `已保存，已同步 ${v.sync.total} 个渠道${v.sync.autoCreated ? `，自动创建 ${v.sync.autoCreated} 个待配置上游，请到总览填入密钥` : ''}` : '已保存');
+    else message.success(v.sync ? `已保存，已同步 ${v.sync.total} 个渠道${v.sync.autoCreated ? `，自动创建 ${v.sync.autoCreated} 个待配置上游，请到「上游」页填入密钥` : ''}` : '已保存');
   } catch (err) {
     message.error(errorText(err));
   } finally {

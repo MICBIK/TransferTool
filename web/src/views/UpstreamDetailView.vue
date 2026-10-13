@@ -55,7 +55,7 @@ async function onRefresh() {
   }
 }
 
-/** 页签与地址栏的 #hash 同步：从总览“编辑”进来直接打开配置页签，刷新页面也停在原页签 */
+/** 页签与地址栏的 #hash 同步：从上游列表“编辑”进来直接打开配置页签，刷新页面也停在原页签 */
 type Tab = 'overview' | 'channels' | 'config';
 const TABS: Tab[] = ['overview', 'channels', 'config'];
 const tab = computed<Tab>({
@@ -83,7 +83,7 @@ async function onDelete() {
   try {
     await api(`/api/upstreams/${id.value}`, { method: 'DELETE' });
     message.success('已删除');
-    await router.push({ name: 'overview' });
+    await router.push({ name: 'upstreams' });
   } catch (err) {
     message.error(errorText(err));
   }
@@ -97,13 +97,13 @@ onMounted(() => void load());
 <template>
   <n-space v-if="missing" vertical>
     <n-alert type="warning" :show-icon="false">该上游不存在或已被删除。</n-alert>
-    <router-link to="/" custom v-slot="{ navigate }"><n-button @click="navigate">返回总览</n-button></router-link>
+    <router-link to="/upstreams" custom v-slot="{ navigate }"><n-button @click="navigate">返回上游列表</n-button></router-link>
   </n-space>
 
   <n-space v-else-if="upstream" vertical :size="16" style="max-width: 960px">
     <n-space justify="space-between" align="center">
       <n-space align="center">
-        <router-link to="/" custom v-slot="{ navigate }"><n-button quaternary size="small" @click="navigate">← 总览</n-button></router-link>
+        <router-link to="/upstreams" custom v-slot="{ navigate }"><n-button quaternary size="small" @click="navigate">← 上游</n-button></router-link>
         <span style="font-size: 18px; font-weight: 600">{{ upstream.name }}</span>
         <n-tag size="small" :bordered="false">{{ TYPE_LABEL[upstream.type] }}</n-tag>
         <n-tag size="small" :type="STATUS_META[upstream.status].tag">{{ STATUS_META[upstream.status].label }}</n-tag>

@@ -9,6 +9,7 @@ import { BalanceStore } from './balanceStore.js';
 import { ChannelAutomation } from './channelAutomation.js';
 import { ChannelService } from './channels.js';
 import { ChannelStatsStore } from './channelStatsStore.js';
+import { DashboardService } from './dashboard.js';
 import { HealthService } from './healthService.js';
 import { LogIngestor } from './logIngestor.js';
 import { OwnSiteService } from './ownSite.js';
@@ -54,6 +55,7 @@ export interface Services {
   channelStats: ChannelStatsStore;
   logIngestor: LogIngestor;
   health: HealthService;
+  dashboard: DashboardService;
   refresher: BalanceRefresher;
   /** 只构造、不启动：由 index.ts 在进程入口调用 start()，测试中永远不会启动 */
   scheduler: Scheduler;
@@ -82,7 +84,8 @@ export function buildServices(config: AppConfig, db: Db, overrides: ServiceOverr
   const channelStats = new ChannelStatsStore(db);
   const logIngestor = new LogIngestor({ settings, ownSite, client: ownSiteClient, stats: channelStats, clock, ...overrides.logIngest });
   const health = new HealthService({ stats: channelStats, channels, upstreams, ingestor: logIngestor, settings, clock });
+  const dashboard = new DashboardService({ store, stats: channelStats, channels, upstreams, clock });
   const refresher = new BalanceRefresher({ db, upstreams, store, adapters, alerts, automation, clock });
   const scheduler = new Scheduler({ refresher, store, channels, ingestor: logIngestor, stats: channelStats, clock });
-  return { config, clock, settings, authState, audit, guard, codes, mailer, login, adminSettings, store, upstreams, alerts, ownSite, channels, channelStats, logIngestor, health, refresher, scheduler };
+  return { config, clock, settings, authState, audit, guard, codes, mailer, login, adminSettings, store, upstreams, alerts, ownSite, channels, channelStats, logIngestor, health, dashboard, refresher, scheduler };
 }

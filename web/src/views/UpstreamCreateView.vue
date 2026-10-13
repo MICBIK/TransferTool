@@ -13,7 +13,7 @@ function onSaved(u: Upstream) {
 
 <template>
   <n-space vertical :size="16" style="max-width: 960px">
-    <router-link to="/" custom v-slot="{ navigate }"><n-button quaternary size="small" @click="navigate">← 总览</n-button></router-link>
+    <router-link to="/upstreams" custom v-slot="{ navigate }"><n-button quaternary size="small" @click="navigate">← 上游</n-button></router-link>
     <n-card title="添加上游" size="small">
       <upstream-form @saved="onSaved" />
     </n-card>
