@@ -2,9 +2,10 @@
 import { computed, h, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { RouterLink } from 'vue-router';
 import type { ChartConfiguration, TooltipItem } from 'chart.js';
-import { NAlert, NButton, NCard, NDataTable, NEmpty, NGrid, NGridItem, NRadioButton, NRadioGroup, NSpace, NTag, NText, useMessage, type DataTableColumns } from 'naive-ui';
+import { NButton, NCard, NDataTable, NEmpty, NGrid, NGridItem, NRadioButton, NRadioGroup, NSpace, NTag, NText, useMessage, type DataTableColumns } from 'naive-ui';
 import { ApiError } from '../api';
-import { channelSummary } from '../channels';
+import { listChannels, type Channel } from '../channels';
+import UptimeStrip from '../components/UptimeStrip.vue';
 import HealthNotices from '../components/HealthNotices.vue';
 import HealthTag from '../components/HealthTag.vue';
 import StatTile from '../components/StatTile.vue';
@@ -25,9 +26,9 @@ import {
   type DashboardSeries,
   type Entity,
 } from '../dashboard';
-import { getHealth, type HealthOverview, type UpstreamRollup } from '../health';
+import { HEALTH_RANK, getHealth, type ChannelHealth, type HealthOverview, type UpstreamRollup } from '../health';
 import { useNarrow } from '../narrow';
-import { STATUS_META, burnText, etaSpan, formatAgo, listUpstreams, refreshAll, usd, type Upstream } from '../upstreams';
+import { STATUS_META, statusLabel, burnText, etaSpan, formatAgo, listUpstreams, refreshAll, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
 const narrow = useNarrow();
@@ -36,6 +37,7 @@ const upstreams = ref<Upstream[]>([]);
 const series = ref<DashboardSeries | null>(null);
 const health = ref<HealthOverview | null>(null);
 const channelsConfigured = ref(false);
+const channelList = ref<Channel[]>([]);
 const loaded = ref(false);
 const refreshing = ref(false);
 const now = ref(Date.now());
@@ -52,8 +54,9 @@ async function load() {
     const [list, s] = await Promise.all([listUpstreams(), getDashboard(days.value)]);
     upstreams.value = list;
     series.value = s;
-    const summary = await channelSummary().catch(() => null);
-    channelsConfigured.value = summary?.configured ?? false;
+    const listing = await listChannels().catch(() => null);
+    channelsConfigured.value = listing?.configured ?? false;
+    channelList.value = listing?.channels ?? [];
     health.value = channelsConfigured.value ? await getHealth().catch(() => health.value) : null;
   } catch (err) {
     if (!loaded.value) message.error(errorText(err));
@@ -141,8 +144,8 @@ const issues = computed<Issue[]>(() => {
       out.push({
         key: `bal-${u.id}`,
         level: u.status === 'critical' ? 'error' : 'warning',
-        tag: STATUS_META[u.status].label,
-        text: `${u.name}：余额 ${usd(u.balanceUsd)}，低于阈值 ${usd(u.status === 'critical' && u.emergencyThreshold !== null ? u.emergencyThreshold : u.threshold)}${eta}`,
+        tag: statusLabel(u),
+        text: `${u.name}：${u.balanceKind === 'key_limit' ? 'Key 剩余额度' : '余额'} ${usd(u.balanceUsd)}，低于阈值 ${usd(u.status === 'critical' && u.emergencyThreshold !== null ? u.emergencyThreshold : u.threshold)}${eta}`,
         action: u.effectiveTopupUrl ? { label: '去充值', href: u.effectiveTopupUrl } : { label: '查看', to: `/upstreams/${u.id}` },
       });
     } else if (u.status === 'unknown') {
@@ -162,6 +165,31 @@ const issues = computed<Issue[]>(() => {
   const order = { error: 0, warning: 1, info: 2 };
   return out.sort((a, b) => order[a.level] - order[b.level]);
 });
+
+// ---------- 渠道状态 ----------
+
+interface Board {
+  c: Channel;
+  hh: ChannelHealth;
+  upstream: string | null;
+}
+const BOARD_LIMIT = 8;
+/** 启用的渠道，最差的在前；同状态按 24 小时成功率从低到高 */
+const board = computed<Board[]>(() => {
+  const byId = new Map((health.value?.channels ?? []).map((x) => [x.channelId, x]));
+  const names = new Map(upstreams.value.map((u) => [u.id, u.name]));
+  return channelList.value
+    .filter((c) => c.status === 1 && byId.has(c.id))
+    .map((c) => ({ c, hh: byId.get(c.id)!, upstream: c.upstreamId === null ? null : (names.get(c.upstreamId) ?? null) }))
+    .sort((a, b) => HEALTH_RANK[a.hh.status] - HEALTH_RANK[b.hh.status] || (a.hh.successRate24h ?? 2) - (b.hh.successRate24h ?? 2) || a.c.name.localeCompare(b.c.name, 'zh-CN'));
+});
+const boardCounts = computed(() => {
+  const n = { healthy: 0, degraded: 0, down: 0, idle: 0 };
+  for (const b of board.value) n[b.hh.status]++;
+  return n;
+});
+const showAllBoard = ref(false);
+const boardShown = computed(() => (showAllBoard.value ? board.value : board.value.slice(0, BOARD_LIMIT)));
 
 // ---------- 图表 ----------
 
@@ -350,7 +378,7 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
         h(RouterLink, { to: `/upstreams/${u.id}`, style: 'color:inherit;font-weight:500' }, { default: () => u.name }),
       ]),
   },
-  { title: '状态', key: 'status', width: 96, render: (u) => h(NTag, { size: 'small', type: STATUS_META[u.status].tag, bordered: false }, { default: () => STATUS_META[u.status].label }) },
+  { title: '状态', key: 'status', width: 96, render: (u) => h(NTag, { size: 'small', type: STATUS_META[u.status].tag, bordered: false }, { default: () => statusLabel(u) }) },
   { title: '余额', key: 'balance', width: 90, align: 'right', render: (u) => h('span', { style: 'font-variant-numeric:tabular-nums' }, u.status === 'unsupported' ? '—' : usd(u.balanceUsd)) },
   { title: '消耗速度', key: 'burn', width: 110, render: (u) => h(NText, { depth: u.burnBasis === 'estimated' ? 1 : 3, style: 'font-size:13px' }, { default: () => burnText(u, now.value) }) },
   {
@@ -439,7 +467,16 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
             </stat-tile>
         </n-grid-item>
         <n-grid-item>
-          <stat-tile label="需要处理" :value="String(issues.length)" :color="issues.some((i) => i.level === 'error') ? STATUS_CRITICAL : issues.length ? '#c98500' : STATUS_GOOD">{{ issues.length ? '见下方列表' : '一切正常' }}</stat-tile>
+          <stat-tile
+            label="正常渠道（近 1 小时）"
+            :value="board.length ? `${boardCounts.healthy + boardCounts.idle} / ${board.length}` : '—'"
+            :color="boardCounts.down ? STATUS_CRITICAL : boardCounts.degraded ? '#c98500' : board.length ? STATUS_GOOD : undefined"
+          >
+            <template v-if="!channelsConfigured">连接本站后显示</template>
+            <template v-else-if="board.length === 0">没有启用的渠道</template>
+            <template v-else-if="boardCounts.down || boardCounts.degraded">异常 {{ boardCounts.down }} 个，降级 {{ boardCounts.degraded }} 个</template>
+            <template v-else>启用的渠道都正常</template>
+          </stat-tile>
         </n-grid-item>
       </n-grid>
 
@@ -452,6 +489,47 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
           <n-button v-if="i.action.href" size="tiny" secondary tag="a" :href="i.action.href" target="_blank" rel="noopener noreferrer">{{ i.action.label }}</n-button>
           <router-link v-else :to="i.action.to!" custom v-slot="{ navigate }"><n-button size="tiny" secondary @click="navigate">{{ i.action.label }}</n-button></router-link>
         </div>
+      </n-card>
+
+      <n-card size="small" title="各上游概况">
+        <template #header-extra>
+          <router-link to="/upstreams" custom v-slot="{ navigate }"><n-button size="small" quaternary @click="navigate">管理上游 →</n-button></router-link>
+        </template>
+        <n-data-table :columns="columns" :data="tableRows" :row-key="(u: Upstream) => u.id" size="small" :bordered="false" :scroll-x="936" />
+        <n-text depth="3" style="display: block; margin-top: 8px; font-size: 12px">
+          余额最后更新 {{ formatAgo(Math.max(0, ...active.map((u) => u.lastCheckedAt ?? 0)) || null, now) }}
+          <template v-if="upstreams.length > active.length">
+            · 另有 {{ upstreams.length - active.length }} 个待配置的上游未计入
+          </template>
+        </n-text>
+      </n-card>
+
+      <n-card v-if="channelsConfigured && board.length" size="small">
+        <template #header>
+          渠道状态
+          <span class="legend"><i style="background: #18a058" />正常 <i style="background: #f0a020" />降级 <i style="background: #d03050" />异常 <i style="background: #e5e4e0" />无请求</span>
+        </template>
+        <template #header-extra>
+          <router-link to="/channels" custom v-slot="{ navigate }"><n-button size="small" quaternary @click="navigate">管理渠道 →</n-button></router-link>
+        </template>
+        <div class="board">
+          <div class="board-head">
+            <span>渠道</span><span>近 24 小时（每格 1 小时）</span><span class="num h1">1 小时</span><span class="num">24 小时</span>
+          </div>
+          <div v-for="b in boardShown" :key="b.c.id" class="board-row">
+            <span class="board-name">
+              <health-tag :status="b.hh.status" />
+              <span class="ellipsis" :title="b.c.name">{{ b.c.name }}</span>
+              <n-text depth="3" class="ellipsis" style="font-size: 12px">{{ b.upstream ?? '未归类' }}</n-text>
+            </span>
+            <uptime-strip :cells="b.hh.hourly ?? []" :ok-rate="health?.thresholds.okRate" :degraded-rate="health?.thresholds.degradedRate" />
+            <span class="num h1" :style="{ color: rateColor(b.hh.successRate1h) }">{{ pct(b.hh.successRate1h) }}</span>
+            <span class="num" :style="{ color: rateColor(b.hh.successRate24h) }">{{ pct(b.hh.successRate24h) }}</span>
+          </div>
+        </div>
+        <n-button v-if="board.length > BOARD_LIMIT" text type="primary" size="small" style="margin-top: 8px" @click="showAllBoard = !showAllBoard">
+          {{ showAllBoard ? '收起' : `显示全部 ${board.length} 个启用渠道` }}
+        </n-button>
       </n-card>
 
       <n-card size="small" title="余额趋势">
@@ -476,22 +554,77 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
           </n-card>
         </n-grid-item>
       </n-grid>
-
-      <n-card size="small" title="各上游概况">
-        <template #header-extra>
-          <router-link to="/upstreams" custom v-slot="{ navigate }"><n-button size="small" quaternary @click="navigate">管理上游 →</n-button></router-link>
-        </template>
-        <n-data-table :columns="columns" :data="tableRows" :row-key="(u: Upstream) => u.id" size="small" :bordered="false" :scroll-x="936" />
-        <n-alert v-if="upstreams.length > active.length" type="info" :show-icon="false" style="margin-top: 12px">
-          另有 {{ upstreams.length - active.length }} 个待配置的上游未计入统计。
-        </n-alert>
-        <n-text depth="3" style="display: block; margin-top: 8px; font-size: 12px">余额最后更新 {{ formatAgo(Math.max(0, ...active.map((u) => u.lastCheckedAt ?? 0)) || null, now) }}</n-text>
-      </n-card>
-    </template>
+</template>
   </n-space>
 </template>
 
 <style scoped>
+.legend {
+  margin-left: 12px;
+  font-size: 12px;
+  font-weight: 400;
+  color: #6b6a66;
+}
+.legend i {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin: 0 4px 0 8px;
+}
+.board-head,
+.board-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.1fr) minmax(160px, 2fr) 56px 56px;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 0;
+}
+.board-head {
+  font-size: 12px;
+  color: #6b6a66;
+  border-bottom: 1px solid #f0efec;
+}
+.board-row {
+  border-bottom: 1px solid #f6f5f2;
+  font-size: 13px;
+}
+.board-row:last-child {
+  border-bottom: none;
+}
+.board-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  .legend {
+    display: none;
+  }
+  .board-head,
+  .board-row {
+    grid-template-columns: 1fr 52px;
+    row-gap: 4px;
+  }
+  .board-head span:nth-child(2),
+  .h1 {
+    display: none;
+  }
+  .board-row :deep(.strip) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+}
 .toolbar {
   display: flex;
   justify-content: space-between;

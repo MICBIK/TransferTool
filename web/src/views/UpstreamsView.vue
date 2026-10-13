@@ -7,7 +7,7 @@ import { channelSummary, type ChannelCount } from '../channels';
 import HealthNotices from '../components/HealthNotices.vue';
 import HealthTag from '../components/HealthTag.vue';
 import { getHealth, type HealthOverview, type UpstreamRollup } from '../health';
-import { STATUS_META, TYPE_LABEL, burnText, etaText, formatAgo, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
+import { STATUS_META, keyQuotaText, statusLabel, TYPE_LABEL, burnText, etaText, formatAgo, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
 const upstreams = ref<Upstream[]>([]);
@@ -119,7 +119,7 @@ onBeforeUnmount(() => clearInterval(timer));
           <template #header-extra>
             <n-space :size="6">
               <n-tag size="small" :bordered="false">{{ TYPE_LABEL[u.type] }}</n-tag>
-              <n-tag size="small" :type="STATUS_META[u.status].tag">{{ STATUS_META[u.status].label }}</n-tag>
+              <n-tag size="small" :type="STATUS_META[u.status].tag">{{ statusLabel(u) }}</n-tag>
             </n-space>
           </template>
 
@@ -138,7 +138,7 @@ onBeforeUnmount(() => clearInterval(timer));
           <div style="font-size: 28px; font-weight: 600; line-height: 1.3" :style="{ color: STATUS_META[u.status].color }">
             {{ u.status === 'unknown' ? '余额未知' : u.status === 'unsupported' ? '暂不支持订阅制' : usd(u.balanceUsd) }}
           </div>
-          <n-text v-if="u.balanceKind === 'key_limit'" type="warning" style="font-size: 12px">这是 Key 限额，不是钱包余额</n-text>
+          <n-text v-if="u.balanceKind === 'key_limit'" type="warning" style="font-size: 12px">{{ keyQuotaText(u) ?? '这是 Key 限额' }}，不是账户余额</n-text>
 
           <div style="margin-top: 8px; font-size: 13px; line-height: 1.9">
             <div>

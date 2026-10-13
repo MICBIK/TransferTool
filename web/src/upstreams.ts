@@ -22,6 +22,8 @@ export interface Upstream {
   status: UpstreamStatus;
   balanceUsd: number | null;
   balanceKind: 'wallet' | 'key_limit' | null;
+  /** sub2api 限额 Key：Key 的总额度与已用（USD，已乘汇率系数）；不是账户余额 */
+  keyQuota: { limit: number | null; used: number | null } | null;
   mode: string | null;
   alertState: 'normal' | 'low' | 'critical';
   alertLastSentAt: number | null;
@@ -77,6 +79,24 @@ export const STATUS_META: Record<UpstreamStatus, { label: string; tag: 'success'
   disabled: { label: '已停用', tag: 'default', color: '#909399' },
   setup: { label: '待配置', tag: 'info', color: '#2080f0' },
 };
+
+/** 余额来自 Key 限额时，「余额不足」其实是这把 Key 的额度快用完了，账户里不一定没钱。 */
+export function statusLabel(u: Pick<Upstream, 'status' | 'balanceKind'>): string {
+  if (u.balanceKind === 'key_limit') {
+    if (u.status === 'low') return 'Key 额度不足';
+    if (u.status === 'critical') return 'Key 额度紧急';
+  }
+  return STATUS_META[u.status].label;
+}
+
+/** Key 限额 $20.00，已用 $19.79 */
+export function keyQuotaText(u: Pick<Upstream, 'keyQuota'>): string | null {
+  const q = u.keyQuota;
+  if (!q || (q.limit === null && q.used === null)) return null;
+  return [q.limit !== null ? `Key 限额 ${usd(q.limit)}` : null, q.used !== null ? `已用 ${usd(q.used)}` : null].filter(Boolean).join('，');
+}
+
+export const KEY_LIMIT_HINT = '这是这把 Key 的剩余额度，不是账户余额。想监控账户余额，请在上游新建一把不限额度、不限速率的 Key 填进来。';
 
 export const TYPE_LABEL: Record<UpstreamType, string> = { newapi: 'new-api', sub2api: 'sub2api' };
 

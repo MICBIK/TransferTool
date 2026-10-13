@@ -121,6 +121,8 @@ export interface UpstreamView {
   balanceUsd: number | null;
   /** wallet = 钱包余额；key_limit = sub2api Key 限额（不是钱包余额） */
   balanceKind: 'wallet' | 'key_limit' | null;
+  /** sub2api Key 限额模式：Key 的总额度与已用（来自最近一次成功查询），其他情况为 null */
+  keyQuota: { limit: number | null; used: number | null } | null;
   mode: string | null;
   alertState: 'normal' | 'low' | 'critical';
   alertLastSentAt: number | null;
@@ -157,6 +159,16 @@ function cleanDomains(list: string[] | undefined, siteUrl: string): string[] {
   // 未填写时默认匹配站点自身的主机名
   if (out.size === 0) out.add(new URL(siteUrl).hostname.toLowerCase());
   return [...out];
+}
+
+function keyQuotaOf(raw: string | null, rateFactor: number): { limit: number | null; used: number | null } {
+  try {
+    const r = JSON.parse(raw ?? '{}') as { limit?: unknown; used?: unknown };
+    const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * rateFactor * 100) / 100 : null);
+    return { limit: num(r.limit), used: num(r.used) };
+  } catch {
+    return { limit: null, used: null };
+  }
 }
 
 export class UpstreamService {
@@ -438,6 +450,7 @@ export class UpstreamService {
       status,
       balanceUsd: showBalance ? success.balanceUsd : null,
       balanceKind: showBalance ? (success.mode === 'quota_limited' ? 'key_limit' : 'wallet') : null,
+      keyQuota: showBalance && success.mode === 'quota_limited' ? keyQuotaOf(success.raw, row.rateFactor) : null,
       mode: latest?.mode ?? null,
       alertState: alert.state,
       alertLastSentAt: alert.lastSentAt,

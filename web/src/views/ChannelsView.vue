@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, h, onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterLink } from 'vue-router';
-import { NAlert, NButton, NDataTable, NEmpty, NInput, NSelect, NSpace, NSwitch, NTag, NText, useDialog, useMessage, type DataTableColumns } from 'naive-ui';
+import { NAlert, NButton, NDataTable, NDropdown, NEmpty, NInput, NSelect, NSpace, NSwitch, NTag, NText, useDialog, useMessage, type DataTableColumns } from 'naive-ui';
 import { ApiError } from '../api';
 import {
   assignUpstream,
@@ -10,6 +10,7 @@ import {
   listChannels,
   setChannelStatus,
   setChannelsStatus,
+  setUpstreamChannelsStatus,
   syncChannels,
   testChannel,
   type Channel,
@@ -18,8 +19,9 @@ import {
 } from '../channels';
 import HealthNotices from '../components/HealthNotices.vue';
 import HealthTag from '../components/HealthTag.vue';
-import { getHealth, latency, pct, type ChannelHealth, type HealthOverview } from '../health';
-import { formatAgo, listUpstreams, type Upstream } from '../upstreams';
+import UptimeStrip from '../components/UptimeStrip.vue';
+import { HEALTH_RANK, getHealth, latency, pct, type ChannelHealth, type HealthOverview } from '../health';
+import { STATUS_META, formatAgo, listUpstreams, statusLabel, usd, type Upstream } from '../upstreams';
 import { useNarrow } from '../narrow';
 
 const message = useMessage();
@@ -46,22 +48,10 @@ const filters = ref<{ upstream: string | null; group: string | null; status: num
 const errorText = (err: unknown) => (err instanceof ApiError ? err.message : '网络错误，请稍后重试');
 
 const channels = computed(() => listing.value?.channels ?? []);
-const upstreamOptions = computed(() => [
-  { label: '全部上游', value: '' },
-  { label: '未归类', value: 'none' },
-  ...upstreams.value.map((u) => ({ label: u.name, value: String(u.id) })),
-]);
-const assignOptions = computed(() => upstreams.value.map((u) => ({ label: u.name, value: u.id })));
 const groupOptions = computed(() => {
   const groups = [...new Set(channels.value.flatMap((c) => c.groups))].sort((a, b) => a.localeCompare(b, 'zh-CN'));
   return [{ label: '全部分组', value: '' }, ...groups.map((g) => ({ label: g, value: g }))];
 });
-const statusOptions = [
-  { label: '全部状态', value: 0 },
-  { label: '启用', value: 1 },
-  { label: '已停用（手动）', value: 2 },
-  { label: '自动禁用', value: 3 },
-];
 
 const filtered = computed(() => {
   const f = filters.value;
@@ -218,105 +208,196 @@ function confirmBatch(enable: boolean) {
   });
 }
 
-const allColumns = computed<DataTableColumns<Channel>>(() => [
+// ---------- 按上游分组 ----------
+
+interface GroupRow {
+  key: string;
+  kind: 'group';
+  upstream: Upstream | null;
+  channels: Channel[];
+  worst: number;
+  children: ChannelRow[];
+}
+interface ChannelRow {
+  key: number;
+  kind: 'channel';
+  c: Channel;
+}
+type Row = GroupRow | ChannelRow;
+
+const upstreamById = computed(() => new Map(upstreams.value.map((u) => [u.id, u])));
+const rank = (c: Channel) => {
+  const st = healthById.value.get(c.id)?.status;
+  // 启用的渠道在前；同为启用时，异常 > 降级 > 正常 > 空闲
+  return (c.status === 1 ? 0 : 10) + (st ? HEALTH_RANK[st] : 4);
+};
+
+const rows = computed<GroupRow[]>(() => {
+  const by = new Map<number | null, Channel[]>();
+  for (const c of filtered.value) {
+    const id = c.upstreamId !== null && upstreamById.value.has(c.upstreamId) ? c.upstreamId : null;
+    by.set(id, [...(by.get(id) ?? []), c]);
+  }
+  const groups: GroupRow[] = [...by].map(([id, list]) => {
+    const sorted = [...list].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name, 'zh-CN'));
+    return {
+      key: `u-${id ?? 'none'}`,
+      kind: 'group',
+      upstream: id === null ? null : upstreamById.value.get(id)!,
+      channels: sorted,
+      worst: Math.min(...sorted.map(rank)),
+      children: sorted.map((c) => ({ key: c.id, kind: 'channel', c })),
+    };
+  });
+  // 有异常渠道的上游排前；未归类放最后
+  return groups.sort((a, b) => (a.upstream === null ? 1 : 0) - (b.upstream === null ? 1 : 0) || a.worst - b.worst || (a.upstream?.name ?? '').localeCompare(b.upstream?.name ?? '', 'zh-CN'));
+});
+const expanded = ref<(string | number)[] | null>(null);
+const expandedKeys = computed(() => expanded.value ?? rows.value.map((r) => r.key));
+
+function confirmUpstream(u: Upstream, enable: boolean) {
+  dialog.warning({
+    title: `${enable ? '启用' : '停用'} ${u.name} 的全部渠道`,
+    content: enable ? '将启用该上游名下所有已停用的渠道。确定吗？' : '停用后这些渠道将不再接收请求。确定吗？',
+    positiveText: enable ? '确认启用' : '确认停用',
+    negativeText: '取消',
+    onPositiveClick: async () => {
+      batchBusy.value = true;
+      try {
+        const r = await setUpstreamChannelsStatus(u.id, enable ? 1 : 2);
+        apply(r);
+        const d = describeResult(r.result, enable ? '启用' : '停用');
+        if (d.ok) message.success(d.text);
+        else message.warning(d.text, { duration: 8000 });
+      } catch (err) {
+        message.error(errorText(err));
+      } finally {
+        batchBusy.value = false;
+      }
+    },
+  });
+}
+
+const thresholds = computed(() => health.value?.thresholds ?? { okRate: 95, degradedRate: 80 });
+
+function renderGroup(g: GroupRow) {
+  const u = g.upstream;
+  const on = g.channels.filter((c) => c.status === 1).length;
+  const bad = g.channels.filter((c) => isUnhealthy(c.id)).length;
+  const left = u
+    ? [
+        h(RouterLink, { to: `/upstreams/${u.id}`, style: 'color:inherit;font-weight:600;font-size:14px' }, { default: () => u.name }),
+        h(NTag, { size: 'small', bordered: false, type: STATUS_META[u.status].tag }, { default: () => statusLabel(u) }),
+        u.status !== 'unsupported' && u.balanceUsd !== null ? h('span', { style: `font-variant-numeric:tabular-nums;color:${STATUS_META[u.status].color};font-weight:500` }, usd(u.balanceUsd)) : null,
+      ]
+    : [h('span', { style: 'font-weight:600;font-size:14px;color:#c98500' }, '未归类'), h(NText, { depth: 3, style: 'font-size:12px' }, { default: () => '没匹配到上游，可在右侧「改上游」里指定' })];
+  const stats = h(NText, { depth: 3, style: 'font-size:12px' }, { default: () => `启用 ${on} / 共 ${g.channels.length}` });
+  return h('div', { class: 'group-head' }, [
+    h('div', { class: 'group-left' }, [...left, stats, bad ? h(NTag, { size: 'small', type: 'error', bordered: false }, { default: () => `${bad} 个异常` }) : null]),
+    u
+      ? h('div', { class: 'group-actions' }, [
+          h(NButton, { size: 'tiny', quaternary: true, type: 'primary', disabled: on === g.channels.length || batchBusy.value, onClick: () => confirmUpstream(u, true) }, { default: () => '全部启用' }),
+          h(NButton, { size: 'tiny', quaternary: true, type: 'error', disabled: on === 0 || batchBusy.value, onClick: () => confirmUpstream(u, false) }, { default: () => '全部停用' }),
+        ])
+      : null,
+  ]);
+}
+
+function renderHealth(c: Channel) {
+  const hh: ChannelHealth | undefined = healthById.value.get(c.id);
+  if (!hh) return h(NText, { depth: 3 }, { default: () => '—' });
+  const tip = `近 1 小时 ${pct(hh.successRate1h)}（${hh.requests1h - hh.errors1h}/${hh.requests1h}）；24 小时 ${pct(hh.successRate24h)}；最近成功 ${hh.lastSuccessAt ? formatAgo(hh.lastSuccessAt, now.value) : '无'}`;
+  return h('div', { class: 'health', title: tip }, [
+    h(HealthTag, { status: hh.status }),
+    hh.hourly ? h(UptimeStrip, { cells: hh.hourly, okRate: thresholds.value.okRate, degradedRate: thresholds.value.degradedRate, style: 'flex:1' }) : null,
+    h('span', { class: 'rate', style: `color:${hh.requests24h ? '#333' : '#aaa'}` }, pct(hh.successRate24h)),
+  ]);
+}
+
+function upstreamMenu(c: Channel) {
+  const opts = [
+    ...upstreams.value.filter((u) => u.id !== c.upstreamId).map((u) => ({ label: `移到 ${u.name}`, key: u.id })),
+    ...(c.manualUpstream ? [{ type: 'divider', key: 'd' }, { label: '恢复按域名自动归类', key: 'auto' }] : []),
+  ];
+  return h(
+    NDropdown,
+    { trigger: 'click', options: opts, scrollable: true, style: 'max-height:320px', onSelect: (k: number | 'auto') => void onAssign(c, k === 'auto' ? null : k) },
+    { default: () => h(NButton, { size: 'tiny', quaternary: true, disabled: busy.value.has(c.id) || opts.length === 0 }, { default: () => (c.upstreamId === null ? '指定上游' : '改上游') }) },
+  );
+}
+
+const SPAN = 99;
+const allColumns = computed<DataTableColumns<Row>>(() => [
   { type: 'selection' },
-  { title: 'ID', key: 'id', width: 56 },
   {
-    title: '名称',
+    title: '渠道',
     key: 'name',
-    minWidth: 160,
-    render: (c) =>
-      h('div', [
-        h('div', { style: 'font-weight:500' }, narrow.value ? `#${c.id} ${c.name}` : c.name),
-        c.baseUrl ? h(NText, { depth: 3, style: 'font-size:12px;word-break:break-all' }, { default: () => c.baseUrl }) : h(NText, { depth: 3, style: 'font-size:12px' }, { default: () => '官方默认端点' }),
-      ]),
+    minWidth: 200,
+    colSpan: (r) => (r.kind === 'group' ? SPAN : 1),
+    render: (r) => {
+      if (r.kind === 'group') return renderGroup(r);
+      const c = r.c;
+      // 树形表格会在前面放一个展开占位，名称块要与它同行
+      return h('div', { style: 'display:inline-block;vertical-align:middle;width:calc(100% - 48px);min-width:0' }, [
+        h('div', { style: `font-weight:500;${c.status === 1 ? '' : 'color:#999'}` }, [
+          c.name,
+          h(NText, { depth: 3, style: 'font-size:12px;margin-left:6px;font-weight:400' }, { default: () => `#${c.id}` }),
+          c.manualUpstream ? h(NTag, { size: 'tiny', bordered: false, style: 'margin-left:6px', title: '上游是手动指定的' }, { default: () => '手动' }) : null,
+        ]),
+        // 手机上把状态条放到名称下方，不用横向滚动也能看到
+        narrow.value ? h('div', { style: 'margin-top:4px' }, [renderHealth(c)]) : h(NText, { depth: 3, style: 'display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', title: c.baseUrl }, { default: () => c.baseUrl || '官方默认端点' }),
+      ]);
+    },
   },
+  { title: '近 24 小时', key: 'health', width: 240, render: (r) => (r.kind === 'channel' ? renderHealth(r.c) : null) },
   {
-    title: '上游',
-    key: 'upstreamId',
-    width: 190,
-    render: (c) =>
-      h('div', { style: 'display:flex;align-items:center;gap:4px' }, [
-        h(NSelect, {
-          size: 'small',
-          value: c.upstreamId,
-          placeholder: '未归类，点此指定',
-          options: assignOptions.value,
-          disabled: busy.value.has(c.id) || assignOptions.value.length === 0,
-          consistentMenuWidth: false,
-          style: 'flex:1;min-width:0',
-          onUpdateValue: (v: number) => void onAssign(c, v),
-        }),
-        c.upstreamId !== null ? h(RouterLink, { to: `/upstreams/${c.upstreamId}`, title: '打开该上游', style: 'text-decoration:none' }, { default: () => '↗' }) : null,
-        c.manualUpstream
-          ? h(NButton, { size: 'tiny', quaternary: true, title: '取消手动指定，恢复按域名自动归类', onClick: () => void onAssign(c, null) }, { default: () => '手动 ×' })
-          : null,
-      ]),
+    title: '耗时',
+    key: 'latency',
+    width: 72,
+    render: (r) => {
+      if (r.kind !== 'channel') return null;
+      const hh = healthById.value.get(r.c.id);
+      return h('span', { style: 'font-size:12px;font-variant-numeric:tabular-nums' }, latency(hh?.avgLatencyMs1h ?? hh?.avgLatencyMs24h ?? null));
+    },
   },
   {
     title: '分组',
     key: 'groups',
-    minWidth: 120,
-    render: (c) => h(NSpace, { size: 4 }, () => c.groups.map((g) => h(NTag, { size: 'small', bordered: false }, { default: () => g }))),
+    minWidth: 110,
+    render: (r) => (r.kind === 'channel' ? h(NSpace, { size: 4 }, () => r.c.groups.map((g) => h(NTag, { size: 'small', bordered: false }, { default: () => g }))) : null),
   },
-  {
-    title: '健康',
-    key: 'health',
-    width: 150,
-    render: (c) => {
-      const hh: ChannelHealth | undefined = healthById.value.get(c.id);
-      if (!hh) return h(NText, { depth: 3 }, { default: () => '—' });
-      if (hh.status === 'idle') {
-        return h('div', [
-          h(HealthTag, { status: hh.status, title: '近 1 小时没有请求' }),
-          hh.requests24h > 0
-            ? h(NText, { depth: 3, style: 'display:block;font-size:12px' }, { default: () => `24h ${pct(hh.successRate24h)} · 最近成功 ${hh.lastSuccessAt ? formatAgo(hh.lastSuccessAt, now.value) : '无'}` })
-            : null,
-        ]);
-      }
-      return h('div', { style: 'font-size:12px;line-height:1.6', title: `近 1 小时 ${hh.requests1h - hh.errors1h}/${hh.requests1h} 次成功；最近成功 ${hh.lastSuccessAt ? formatAgo(hh.lastSuccessAt, now.value) : '无'}` }, [
-        h(HealthTag, { status: hh.status }),
-        h('div', `1h ${pct(hh.successRate1h)} · 24h ${pct(hh.successRate24h)}`),
-        h(NText, { depth: 3 }, { default: () => `均耗时 ${latency(hh.avgLatencyMs1h ?? hh.avgLatencyMs24h)}` }),
-      ]);
-    },
-  },
-  {
-    title: '优先级/权重',
-    key: 'priority',
-    width: 100,
-    render: (c) => h('div', { style: 'font-size:12px;line-height:1.6' }, [h('div', `${c.priority} / ${c.weight}`), h(NText, { depth: 3 }, { default: () => (c.responseTimeMs > 0 ? `${c.responseTimeMs} ms` : '') })]),
-  },
+  { title: '优先级/权重', key: 'priority', width: 104, render: (r) => (r.kind === 'channel' ? h('span', { style: 'font-size:12px' }, `${r.c.priority} · ${r.c.weight}`) : null) },
   {
     title: '启用',
     key: 'switch',
-    width: 96,
-    fixed: narrow.value ? undefined : 'right',
-    render: (c) => {
-      const m = channelStatusMeta(c.status);
+    width: 92,
+    render: (r) => {
+      if (r.kind !== 'channel') return null;
+      const c = r.c;
       return h('div', { style: 'display:flex;flex-direction:column;align-items:flex-start;gap:2px' }, [
         h('div', { style: 'display:flex;align-items:center;gap:6px' }, [
           h(NSwitch, { size: 'small', value: c.status === 1, loading: busy.value.has(c.id), onUpdateValue: (v: boolean) => void onToggle(c, v) }),
-          c.status !== 1 ? h(NText, { depth: 3, style: 'font-size:12px' }, { default: () => m.label }) : null,
+          c.status !== 1 ? h(NText, { depth: 3, style: 'font-size:12px' }, { default: () => channelStatusMeta(c.status).label }) : null,
         ]),
         c.autoDisabled ? h(NTag, { size: 'tiny', type: 'warning', bordered: false, title: '余额归零时由本工具停用，余额恢复后会自动启用' }, { default: () => '余额归零停用' }) : null,
       ]);
     },
   },
   {
-    title: '测试',
-    key: 'test',
-    width: 110,
-    fixed: narrow.value ? undefined : 'right',
-    render: (c) => {
-      const r = testResults.value[c.id];
+    title: '操作',
+    key: 'actions',
+    width: 150,
+    render: (r) => {
+      if (r.kind !== 'channel') return null;
+      const c = r.c;
+      const t = testResults.value[c.id];
       return h('div', [
-        h(NButton, { size: 'small', loading: testing.value.has(c.id), onClick: () => void onTest(c) }, { default: () => '测试' }),
-        r
+        h('div', { style: 'display:flex;gap:2px' }, [h(NButton, { size: 'tiny', quaternary: true, type: 'primary', loading: testing.value.has(c.id), onClick: () => void onTest(c) }, { default: () => '测试' }), upstreamMenu(c)]),
+        t
           ? h(
               NText,
-              { type: 'error' in r ? 'error' : r.passed ? 'success' : 'error', style: 'display:block;font-size:12px;word-break:break-all' },
-              { default: () => ('error' in r ? r.error : r.passed ? `通过${r.timeSeconds !== null ? `，${r.timeSeconds.toFixed(2)} 秒` : ''}` : `未通过：${r.message || '未知原因'}`) },
+              { type: 'error' in t ? 'error' : t.passed ? 'success' : 'error', style: 'display:block;font-size:12px;word-break:break-all' },
+              { default: () => ('error' in t ? t.error : t.passed ? `通过${t.timeSeconds !== null ? `，${t.timeSeconds.toFixed(2)} 秒` : ''}` : `未通过：${t.message || '未知原因'}`) },
             )
           : null,
       ]);
@@ -324,9 +405,13 @@ const allColumns = computed<DataTableColumns<Channel>>(() => [
   },
 ]);
 
-/** 手机上去掉 ID、分组、优先级列，让健康和启用开关尽量留在一屏内 */
-const NARROW_HIDDEN = new Set(['id', 'groups', 'priority']);
+/** 手机上去掉耗时、分组、优先级列，状态条并入名称列，让启用开关留在一屏内 */
+const NARROW_HIDDEN = new Set(['health', 'latency', 'groups', 'priority']);
 const columns = computed(() => (narrow.value ? allColumns.value.filter((c) => !('key' in c) || !NARROW_HIDDEN.has(String(c.key))) : allColumns.value));
+const checkedKeys = computed(() => [...checked.value]);
+function onChecked(keys: Array<string | number>) {
+  checked.value = keys.filter((k): k is number => typeof k === 'number');
+}
 
 onMounted(() => {
   void load();
@@ -350,43 +435,41 @@ onBeforeUnmount(() => clearInterval(timer));
       <div class="head">
         <div class="quick">
           <button :class="{ on: quick === 'all' }" @click="setQuick('all')">全部 <b>{{ counts.total }}</b></button>
+          <button :class="{ on: quick === 'unhealthy' }" :disabled="counts.unhealthy === 0" @click="setQuick('unhealthy')">异常 / 降级 <b :class="{ bad: counts.unhealthy > 0 }">{{ counts.unhealthy }}</b></button>
           <button :class="{ on: quick === 'enabled' }" @click="setQuick('enabled')">启用 <b class="good">{{ counts.enabled }}</b></button>
           <button :class="{ on: quick === 'disabled' }" @click="setQuick('disabled')">已停用 <b>{{ counts.disabled }}</b></button>
-          <button :class="{ on: quick === 'unhealthy' }" :disabled="counts.unhealthy === 0" @click="setQuick('unhealthy')">异常 / 降级 <b :class="{ bad: counts.unhealthy > 0 }">{{ counts.unhealthy }}</b></button>
-          <button :class="{ on: quick === 'unassigned' }" :disabled="counts.unassigned === 0" @click="setQuick('unassigned')">未归类 <b :class="{ warn: counts.unassigned > 0 }">{{ counts.unassigned }}</b></button>
+          <button v-if="counts.unassigned > 0" :class="{ on: quick === 'unassigned' }" @click="setQuick('unassigned')">未归类 <b class="warn">{{ counts.unassigned }}</b></button>
         </div>
-        <n-space align="center" :size="8">
-          <n-text depth="3" style="font-size: 12px">同步于 {{ formatAgo(listing?.syncedAt ?? null, now) }}，每 5 分钟自动同步</n-text>
-          <n-button size="small" :loading="syncing" @click="onSync">立即同步</n-button>
-        </n-space>
+        <div class="filters">
+          <n-input v-model:value="filters.keyword" size="small" clearable placeholder="搜索名称 / 地址 / ID" :style="{ width: narrow ? 'calc(50vw - 22px)' : '180px' }" />
+          <n-select :value="filters.group ?? ''" size="small" :options="groupOptions" :style="{ width: narrow ? 'calc(50vw - 22px)' : '130px' }" @update:value="(v: string) => (filters.group = v || null)" />
+          <n-button size="small" :loading="syncing" :title="`同步于 ${formatAgo(listing?.syncedAt ?? null, now)}，每 5 分钟自动同步`" @click="onSync">同步渠道</n-button>
+        </div>
       </div>
 
-      <n-space :size="12">
-        <n-select :value="filters.upstream ?? ''" :options="upstreamOptions" :style="{ width: narrow ? 'calc(50vw - 30px)' : '170px' }" @update:value="(v: string) => (filters.upstream = v || null)" />
-        <n-select :value="filters.group ?? ''" :options="groupOptions" :style="{ width: narrow ? 'calc(50vw - 30px)' : '150px' }" @update:value="(v: string) => (filters.group = v || null)" />
-        <n-select :value="filters.status ?? 0" :options="statusOptions" :style="{ width: narrow ? 'calc(50vw - 30px)' : '160px' }" @update:value="(v: number) => (filters.status = v || null)" />
-        <n-input v-model:value="filters.keyword" clearable placeholder="搜索名称 / 地址 / ID" :style="{ width: narrow ? 'calc(50vw - 30px)' : '200px' }" />
-        <n-text v-if="filtered.length !== channels.length" depth="3" style="line-height: 34px">显示 {{ filtered.length }} / {{ channels.length }} 个</n-text>
-      </n-space>
-
-      <n-space align="center" :size="12">
-        <n-button size="small" :disabled="filtered.length === 0" @click="checked = filtered.map((c) => c.id)">选择当前筛选结果（{{ filtered.length }}）</n-button>
-        <n-button size="small" :disabled="checked.length === 0" @click="checked = []">清空选择</n-button>
-        <n-text depth="3">已选 {{ checked.length }} 个</n-text>
-        <n-button size="small" type="primary" secondary :disabled="checked.length === 0" :loading="batchBusy" @click="confirmBatch(true)">批量启用</n-button>
-        <n-button size="small" type="error" secondary :disabled="checked.length === 0" :loading="batchBusy" @click="confirmBatch(false)">批量停用</n-button>
-      </n-space>
+      <div v-if="checked.length > 0" class="selbar">
+        <span>已选 <b>{{ checked.length }}</b> 个渠道</span>
+        <n-button size="small" type="primary" :loading="batchBusy" @click="confirmBatch(true)">启用</n-button>
+        <n-button size="small" type="error" secondary :loading="batchBusy" @click="confirmBatch(false)">停用</n-button>
+        <n-button size="small" quaternary @click="checked = []">取消选择</n-button>
+      </div>
 
       <n-data-table
         :columns="columns"
-        :data="filtered"
-        :row-key="(c: Channel) => c.id"
-        :checked-row-keys="checked"
-        @update:checked-row-keys="(keys: Array<string | number>) => (checked = keys as number[])"
-        :pagination="{ pageSize: 50 }"
-        :scroll-x="narrow ? 640 : 960"
+        :data="rows"
+        :row-key="(r: Row) => r.key"
+        :checked-row-keys="checkedKeys"
+        :expanded-row-keys="expandedKeys"
+        :row-class-name="(r: Row) => (r.kind === 'group' ? 'group-row' : '')"
+        :scroll-x="narrow ? 470 : 1000"
         size="small"
+        @update:checked-row-keys="onChecked"
+        @update:expanded-row-keys="(k: Array<string | number>) => (expanded = k)"
       />
+      <n-text depth="3" style="font-size: 12px">
+        <template v-if="filtered.length !== channels.length">显示 {{ filtered.length }} / {{ channels.length }} 个渠道 · </template>
+        状态条每格 1 小时，绿 / 黄 / 红 = 正常 / 降级 / 异常，灰色 = 没有请求 · 渠道同步于 {{ formatAgo(listing?.syncedAt ?? null, now) }}
+      </n-text>
     </template>
   </n-space>
 </template>
@@ -398,6 +481,56 @@ onBeforeUnmount(() => clearInterval(timer));
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
+}
+.filters {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.selbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: #eef6ff;
+  border: 1px solid #c9e0fb;
+  font-size: 13px;
+}
+.selbar span {
+  margin-right: 4px;
+}
+:deep(.group-row td) {
+  background: #f7f7f5 !important;
+}
+:deep(.group-head) {
+  display: inline-flex;
+  width: calc(100% - 32px);
+  vertical-align: middle;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+:deep(.group-left) {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+:deep(.health) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+:deep(.health .rate) {
+  width: 44px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .quick {
   display: flex;

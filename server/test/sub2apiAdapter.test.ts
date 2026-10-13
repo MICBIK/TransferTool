@@ -34,6 +34,17 @@ describe('sub2api 适配器', () => {
     expect(r).toMatchObject({ ok: true, balanceUsd: expected, mode: 'quota_limited', kind: 'key_limit' });
   });
 
+  it('quota_limited：记录 Key 限额与已用，便于说明不是账户余额', async () => {
+    const r = await setup(() => jsonRes({ mode: 'quota_limited', isValid: true, quota: { limit: 20, used: 19.79, remaining: 0.21, unit: 'USD' }, remaining: 0.21, unit: 'USD' })).adapters.fetchBalance(base);
+    expect(r).toMatchObject({ ok: true, balanceUsd: 0.21, kind: 'key_limit', raw: { mode: 'quota_limited', remaining: 0.21, limit: 20, used: 19.79 } });
+  });
+
+  it('quota_limited 只有速率限制：提示换一个不限额的 Key', async () => {
+    const r = await setup(() => jsonRes({ mode: 'quota_limited', isValid: true, rate_limits: [{ window: '1d', limit: 5, used: 1, remaining: 4 }] })).adapters.fetchBalance(base);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('速率限制');
+  });
+
   it('quota_limited 取不到剩余额度：标为未知（失败），不是 0', async () => {
     const r = await setup(() => jsonRes({ mode: 'quota_limited', something: 1 })).adapters.fetchBalance(base);
     expect(r.ok).toBe(false);
