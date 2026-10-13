@@ -7,17 +7,18 @@ import { ApiError } from '../api';
 import { channelSummary } from '../channels';
 import HealthNotices from '../components/HealthNotices.vue';
 import HealthTag from '../components/HealthTag.vue';
+import StatTile from '../components/StatTile.vue';
 import VizChart from '../components/VizChart.vue';
 import {
   HOUR_MS,
   STATUS_CRITICAL,
   STATUS_GOOD,
   assignEntities,
+  axisUsd,
   bucketLabel,
   bucketMs,
   bucketRange,
   bucketStart,
-  compactUsd,
   getDashboard,
   pct,
   type DashboardDays,
@@ -26,7 +27,7 @@ import {
 } from '../dashboard';
 import { getHealth, type HealthOverview, type UpstreamRollup } from '../health';
 import { useNarrow } from '../narrow';
-import { STATUS_META, burnText, formatAgo, listUpstreams, refreshAll, usd, type Upstream } from '../upstreams';
+import { STATUS_META, burnText, etaSpan, formatAgo, listUpstreams, refreshAll, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
 const narrow = useNarrow();
@@ -136,7 +137,7 @@ const issues = computed<Issue[]>(() => {
     if (u.needsSetup) {
       out.push({ key: `setup-${u.id}`, level: 'info', tag: '待配置', text: `${u.name}：自动创建的上游，还没填密钥`, action: { label: '填入密钥', to: `/upstreams/${u.id}#config` } });
     } else if (u.status === 'critical' || u.status === 'low') {
-      const eta = u.burnBasis === 'estimated' && u.exhaustAt !== null ? `，按当前速度${etaShort(u.exhaustAt)}后用完` : '';
+      const eta = u.burnBasis === 'estimated' && u.exhaustAt !== null ? `，按当前速度${etaSpan(u.exhaustAt, now.value)}后用完` : '';
       out.push({
         key: `bal-${u.id}`,
         level: u.status === 'critical' ? 'error' : 'warning',
@@ -175,15 +176,6 @@ const colorOf = computed(() => {
   for (const e of entities.value) for (const id of e.ids) m.set(id, e.color);
   return m;
 });
-
-/** 剩余时间简写：约 3.5 天 / 约 20 小时 */
-function etaShort(exhaustAt: number): string {
-  const hours = Math.max(0, (exhaustAt - now.value) / HOUR_MS);
-  return hours >= 48 ? `约 ${(hours / 24).toFixed(1)} 天` : hours >= 1 ? `约 ${Math.round(hours)} 小时` : '不足 1 小时';
-}
-
-/** 坐标轴金额：整数不带小数 */
-const axisUsd = (v: number) => (Number.isInteger(v) ? `$${v >= 1000 ? `${v / 1000}k` : v}` : compactUsd(v));
 
 /** 去掉开头全空的部分：刚部署、数据还不满所选区间时，图表从第一条数据开始画 */
 function trimLeading<T extends { data: (number | null)[] }>(labels: string[], datasets: T[]): { labels: string[]; datasets: T[] } {
@@ -368,7 +360,7 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
     render: (u) => {
       if (u.burnBasis !== 'estimated' || u.exhaustAt === null) return h(NText, { depth: 3 }, { default: () => '—' });
       const d = (u.exhaustAt - now.value) / (24 * HOUR_MS);
-      return h(NText, { type: d < 3 ? 'error' : d < 7 ? 'warning' : undefined }, { default: () => etaShort(u.exhaustAt!) });
+      return h(NText, { type: d < 3 ? 'error' : d < 7 ? 'warning' : undefined }, { default: () => etaSpan(u.exhaustAt!, now.value) });
     },
   },
   { title: '区间消耗', key: 'spend', width: 110, align: 'right', render: (u) => h('span', { style: 'font-variant-numeric:tabular-nums' }, usd(spendBy.value.get(u.id) ?? 0)) },
@@ -427,43 +419,27 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
         </n-space>
       </div>
 
-      <n-grid cols="2 880:4" :x-gap="narrow ? 12 : 16" :y-gap="narrow ? 12 : 16" :class="{ narrow }">
+      <n-grid cols="2 880:4" :x-gap="narrow ? 12 : 16" :y-gap="narrow ? 12 : 16">
         <n-grid-item>
-          <n-card size="small" class="kpi">
-            <div class="kpi-label">总余额</div>
-            <div class="kpi-value">{{ usd(kpi.total) }}</div>
-            <div class="kpi-sub">{{ kpi.counted }} 个上游有余额数据</div>
-          </n-card>
+          <stat-tile label="总余额" :value="usd(kpi.total)">{{ kpi.counted }} 个上游有余额数据</stat-tile>
         </n-grid-item>
         <n-grid-item>
-          <n-card size="small" class="kpi">
-            <div class="kpi-label">{{ RANGE_LABEL[days] }}消耗</div>
-            <div class="kpi-value">{{ usd(kpi.spend) }}</div>
-            <div class="kpi-sub">
+          <stat-tile :label="`${RANGE_LABEL[days]}消耗`" :value="usd(kpi.spend)">
               <template v-if="kpi.burnCounted > 0">
                 当前速度 {{ usd(kpi.burn) }}/天<template v-if="kpi.burn > 0">，总余额约可用 {{ (kpi.total / kpi.burn).toFixed(1) }} 天</template>
               </template>
               <template v-else>消耗速度收集数据中</template>
-            </div>
-          </n-card>
+            </stat-tile>
         </n-grid-item>
         <n-grid-item>
-          <n-card size="small" class="kpi">
-            <div class="kpi-label">请求成功率（{{ RANGE_LABEL[days] }}）</div>
-            <div class="kpi-value" :style="{ color: kpi.rate === null ? undefined : rateColor(kpi.rate) }">{{ pct(kpi.rate) }}</div>
-            <div class="kpi-sub">
+          <stat-tile :label="`请求成功率（${RANGE_LABEL[days]}）`" :value="pct(kpi.rate)" :color="kpi.rate === null ? undefined : rateColor(kpi.rate)">
               <template v-if="kpi.requests > 0">共 {{ kpi.requests.toLocaleString() }} 次请求，失败 {{ kpi.errors.toLocaleString() }} 次</template>
               <template v-else-if="channelsConfigured">还没有请求日志</template>
               <template v-else>连接本站后显示</template>
-            </div>
-          </n-card>
+            </stat-tile>
         </n-grid-item>
         <n-grid-item>
-          <n-card size="small" class="kpi">
-            <div class="kpi-label">需要处理</div>
-            <div class="kpi-value" :style="{ color: issues.some((i) => i.level === 'error') ? STATUS_CRITICAL : issues.length ? '#c98500' : STATUS_GOOD }">{{ issues.length }}</div>
-            <div class="kpi-sub">{{ issues.length ? '见下方列表' : '一切正常' }}</div>
-          </n-card>
+          <stat-tile label="需要处理" :value="String(issues.length)" :color="issues.some((i) => i.level === 'error') ? STATUS_CRITICAL : issues.length ? '#c98500' : STATUS_GOOD">{{ issues.length ? '见下方列表' : '一切正常' }}</stat-tile>
         </n-grid-item>
       </n-grid>
 
@@ -522,26 +498,6 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-}
-.kpi {
-  height: 100%;
-}
-.kpi-label {
-  font-size: 13px;
-  color: #6b6a66;
-}
-.kpi-value {
-  font-size: 28px;
-  font-weight: 600;
-  line-height: 1.4;
-  font-variant-numeric: tabular-nums;
-}
-.kpi-sub {
-  font-size: 12px;
-  color: #6b6a66;
-}
-.narrow .kpi-value {
-  font-size: 22px;
 }
 .issue {
   display: flex;

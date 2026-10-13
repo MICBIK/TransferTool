@@ -41,7 +41,7 @@ const checked = ref<number[]>([]);
 const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | undefined;
 
-const filters = ref<{ upstream: string | null; group: string | null; status: number | null; keyword: string }>({ upstream: null, group: null, status: null, keyword: '' });
+const filters = ref<{ upstream: string | null; group: string | null; status: number | null; keyword: string; unhealthy: boolean }>({ upstream: null, group: null, status: null, keyword: '', unhealthy: false });
 
 const errorText = (err: unknown) => (err instanceof ApiError ? err.message : '网络错误，请稍后重试');
 
@@ -71,10 +71,39 @@ const filtered = computed(() => {
     if (f.upstream && f.upstream !== 'none' && String(c.upstreamId) !== f.upstream) return false;
     if (f.group && !c.groups.includes(f.group)) return false;
     if (f.status && c.status !== f.status) return false;
+    if (f.unhealthy && !isUnhealthy(c.id)) return false;
     if (kw && !(c.name.toLowerCase().includes(kw) || c.baseUrl.toLowerCase().includes(kw) || String(c.id) === kw)) return false;
     return true;
   });
 });
+function isUnhealthy(id: number): boolean {
+  const st = healthById.value.get(id)?.status;
+  return st === 'down' || st === 'degraded';
+}
+
+/** 顶部的计数条：一眼看到启用 / 停用 / 异常 / 未归类各有多少，点击即筛选 */
+const counts = computed(() => ({
+  total: channels.value.length,
+  enabled: channels.value.filter((c) => c.status === 1).length,
+  disabled: channels.value.filter((c) => c.status !== 1).length,
+  unhealthy: channels.value.filter((c) => isUnhealthy(c.id)).length,
+  unassigned: channels.value.filter((c) => c.upstreamId === null).length,
+}));
+type Quick = 'all' | 'enabled' | 'disabled' | 'unhealthy' | 'unassigned';
+const quick = computed<Quick | null>(() => {
+  const f = filters.value;
+  if (f.group || f.keyword) return null;
+  if (!f.upstream && !f.status && !f.unhealthy) return 'all';
+  if (f.status === 1 && !f.upstream && !f.unhealthy) return 'enabled';
+  if (f.status === 2 && !f.upstream && !f.unhealthy) return 'disabled';
+  if (f.unhealthy && !f.upstream && !f.status) return 'unhealthy';
+  if (f.upstream === 'none' && !f.status && !f.unhealthy) return 'unassigned';
+  return null;
+});
+function setQuick(q: Quick) {
+  filters.value = { upstream: q === 'unassigned' ? 'none' : null, group: null, status: q === 'enabled' ? 1 : q === 'disabled' ? 2 : null, keyword: '', unhealthy: q === 'unhealthy' };
+}
+
 const checkedChannels = computed(() => channels.value.filter((c) => checked.value.includes(c.id)));
 
 function apply(l: ChannelListing) {
@@ -189,7 +218,7 @@ function confirmBatch(enable: boolean) {
   });
 }
 
-const columns = computed<DataTableColumns<Channel>>(() => [
+const allColumns = computed<DataTableColumns<Channel>>(() => [
   { type: 'selection' },
   { title: 'ID', key: 'id', width: 56 },
   {
@@ -198,7 +227,7 @@ const columns = computed<DataTableColumns<Channel>>(() => [
     minWidth: 160,
     render: (c) =>
       h('div', [
-        h('div', { style: 'font-weight:500' }, c.name),
+        h('div', { style: 'font-weight:500' }, narrow.value ? `#${c.id} ${c.name}` : c.name),
         c.baseUrl ? h(NText, { depth: 3, style: 'font-size:12px;word-break:break-all' }, { default: () => c.baseUrl }) : h(NText, { depth: 3, style: 'font-size:12px' }, { default: () => '官方默认端点' }),
       ]),
   },
@@ -231,18 +260,6 @@ const columns = computed<DataTableColumns<Channel>>(() => [
     render: (c) => h(NSpace, { size: 4 }, () => c.groups.map((g) => h(NTag, { size: 'small', bordered: false }, { default: () => g }))),
   },
   {
-    title: '状态',
-    key: 'status',
-    width: 120,
-    render: (c) => {
-      const m = channelStatusMeta(c.status);
-      return h(NSpace, { size: 4, wrapItem: false }, () => [
-        h(NTag, { size: 'small', type: m.tag }, { default: () => m.label }),
-        c.autoDisabled ? h(NTag, { size: 'small', type: 'warning', bordered: false, title: '余额归零时由本工具停用，余额恢复后会自动启用' }, { default: () => '余额归零停用' }) : null,
-      ]);
-    },
-  },
-  {
     title: '健康',
     key: 'health',
     width: 150,
@@ -273,14 +290,23 @@ const columns = computed<DataTableColumns<Channel>>(() => [
   {
     title: '启用',
     key: 'switch',
-    width: 64,
+    width: 96,
     fixed: narrow.value ? undefined : 'right',
-    render: (c) => h(NSwitch, { value: c.status === 1, loading: busy.value.has(c.id), onUpdateValue: (v: boolean) => void onToggle(c, v) }),
+    render: (c) => {
+      const m = channelStatusMeta(c.status);
+      return h('div', { style: 'display:flex;flex-direction:column;align-items:flex-start;gap:2px' }, [
+        h('div', { style: 'display:flex;align-items:center;gap:6px' }, [
+          h(NSwitch, { size: 'small', value: c.status === 1, loading: busy.value.has(c.id), onUpdateValue: (v: boolean) => void onToggle(c, v) }),
+          c.status !== 1 ? h(NText, { depth: 3, style: 'font-size:12px' }, { default: () => m.label }) : null,
+        ]),
+        c.autoDisabled ? h(NTag, { size: 'tiny', type: 'warning', bordered: false, title: '余额归零时由本工具停用，余额恢复后会自动启用' }, { default: () => '余额归零停用' }) : null,
+      ]);
+    },
   },
   {
     title: '测试',
     key: 'test',
-    width: 130,
+    width: 110,
     fixed: narrow.value ? undefined : 'right',
     render: (c) => {
       const r = testResults.value[c.id];
@@ -297,6 +323,10 @@ const columns = computed<DataTableColumns<Channel>>(() => [
     },
   },
 ]);
+
+/** 手机上去掉 ID、分组、优先级列，让健康和启用开关尽量留在一屏内 */
+const NARROW_HIDDEN = new Set(['id', 'groups', 'priority']);
+const columns = computed(() => (narrow.value ? allColumns.value.filter((c) => !('key' in c) || !NARROW_HIDDEN.has(String(c.key))) : allColumns.value));
 
 onMounted(() => {
   void load();
@@ -317,16 +347,26 @@ onBeforeUnmount(() => clearInterval(timer));
       <n-alert v-if="listing?.lastError" type="error" :show-icon="false">最近一次同步失败：{{ listing.lastError }}（下方为上次成功同步的缓存数据）</n-alert>
       <health-notices :health="health" />
 
-      <n-space justify="space-between" align="center">
-        <n-text depth="3">共 {{ channels.length }} 个渠道，当前显示 {{ filtered.length }} 个 · 最近同步 {{ formatAgo(listing?.syncedAt ?? null, now) }}（每 5 分钟自动同步）</n-text>
-        <n-button :loading="syncing" @click="onSync">立即同步</n-button>
-      </n-space>
+      <div class="head">
+        <div class="quick">
+          <button :class="{ on: quick === 'all' }" @click="setQuick('all')">全部 <b>{{ counts.total }}</b></button>
+          <button :class="{ on: quick === 'enabled' }" @click="setQuick('enabled')">启用 <b class="good">{{ counts.enabled }}</b></button>
+          <button :class="{ on: quick === 'disabled' }" @click="setQuick('disabled')">已停用 <b>{{ counts.disabled }}</b></button>
+          <button :class="{ on: quick === 'unhealthy' }" :disabled="counts.unhealthy === 0" @click="setQuick('unhealthy')">异常 / 降级 <b :class="{ bad: counts.unhealthy > 0 }">{{ counts.unhealthy }}</b></button>
+          <button :class="{ on: quick === 'unassigned' }" :disabled="counts.unassigned === 0" @click="setQuick('unassigned')">未归类 <b :class="{ warn: counts.unassigned > 0 }">{{ counts.unassigned }}</b></button>
+        </div>
+        <n-space align="center" :size="8">
+          <n-text depth="3" style="font-size: 12px">同步于 {{ formatAgo(listing?.syncedAt ?? null, now) }}，每 5 分钟自动同步</n-text>
+          <n-button size="small" :loading="syncing" @click="onSync">立即同步</n-button>
+        </n-space>
+      </div>
 
       <n-space :size="12">
-        <n-select :value="filters.upstream ?? ''" :options="upstreamOptions" style="width: 170px" @update:value="(v: string) => (filters.upstream = v || null)" />
-        <n-select :value="filters.group ?? ''" :options="groupOptions" style="width: 150px" @update:value="(v: string) => (filters.group = v || null)" />
-        <n-select :value="filters.status ?? 0" :options="statusOptions" style="width: 160px" @update:value="(v: number) => (filters.status = v || null)" />
-        <n-input v-model:value="filters.keyword" clearable placeholder="搜索名称 / 地址 / ID" style="width: 200px" />
+        <n-select :value="filters.upstream ?? ''" :options="upstreamOptions" :style="{ width: narrow ? 'calc(50vw - 30px)' : '170px' }" @update:value="(v: string) => (filters.upstream = v || null)" />
+        <n-select :value="filters.group ?? ''" :options="groupOptions" :style="{ width: narrow ? 'calc(50vw - 30px)' : '150px' }" @update:value="(v: string) => (filters.group = v || null)" />
+        <n-select :value="filters.status ?? 0" :options="statusOptions" :style="{ width: narrow ? 'calc(50vw - 30px)' : '160px' }" @update:value="(v: number) => (filters.status = v || null)" />
+        <n-input v-model:value="filters.keyword" clearable placeholder="搜索名称 / 地址 / ID" :style="{ width: narrow ? 'calc(50vw - 30px)' : '200px' }" />
+        <n-text v-if="filtered.length !== channels.length" depth="3" style="line-height: 34px">显示 {{ filtered.length }} / {{ channels.length }} 个</n-text>
       </n-space>
 
       <n-space align="center" :size="12">
@@ -344,9 +384,55 @@ onBeforeUnmount(() => clearInterval(timer));
         :checked-row-keys="checked"
         @update:checked-row-keys="(keys: Array<string | number>) => (checked = keys as number[])"
         :pagination="{ pageSize: 50 }"
-        :scroll-x="1080"
+        :scroll-x="narrow ? 640 : 960"
         size="small"
       />
     </template>
   </n-space>
 </template>
+
+<style scoped>
+.head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.quick button {
+  border: 1px solid #e5e4e0;
+  background: #fff;
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #52514e;
+  cursor: pointer;
+}
+.quick button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.quick button.on {
+  border-color: #18a058;
+  color: #18a058;
+  background: #f0faf4;
+}
+.quick b {
+  margin-left: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.quick b.good {
+  color: #0ca30c;
+}
+.quick b.bad {
+  color: #d03b3b;
+}
+.quick b.warn {
+  color: #c98500;
+}
+</style>

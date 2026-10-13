@@ -96,6 +96,9 @@ export function compactUsd(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
+/** 坐标轴金额：整数不带小数 */
+export const axisUsd = (v: number): string => (Number.isInteger(v) ? `$${v >= 1000 ? `${v / 1000}k` : v}` : compactUsd(v));
+
 export function pct(rate: number | null): string {
   return rate === null ? '—' : `${(rate * 100).toFixed(rate >= 0.999 || rate === 0 ? 0 : 1)}%`;
 }

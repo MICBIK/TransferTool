@@ -1,21 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import {
-  NAlert,
-  NButton,
-  NCard,
-  NForm,
-  NFormItem,
-  NInput,
-  NInputNumber,
-  NRadio,
-  NSpace,
-  NSwitch,
-  NTabPane,
-  NTabs,
-  useMessage,
-} from 'naive-ui';
+import { NAlert, NButton, NCard, NForm, NFormItem, NInput, NInputNumber, NRadio, NSpace, NSwitch, NTabPane, NTabs, NTag, useMessage } from 'naive-ui';
 import { api, ApiError } from '../api';
 
 interface SettingsView {
@@ -268,6 +254,9 @@ onMounted(() => void load().catch((err) => message.error(errorText(err))));
     <n-tabs v-model:value="tab" type="line" animated>
       <n-tab-pane name="site" tab="本站连接">
         <n-card title="本站（new-api）连接">
+          <template #header-extra>
+            <n-tag :type="own.configured ? 'success' : 'default'" size="small" :bordered="false">{{ own.configured ? '✓ 已连接' : '未连接' }}</n-tag>
+          </template>
           <n-form label-placement="left" label-width="90">
             <n-form-item label="本站地址"><n-input v-model:value="own.url" placeholder="https://your-site.example.com" /></n-form-item>
             <n-form-item label="访问令牌">
@@ -292,6 +281,9 @@ onMounted(() => void load().catch((err) => message.error(errorText(err))));
       <n-tab-pane name="mail" tab="邮件与登录">
         <n-space vertical :size="20">
             <n-card title="邮件（SMTP）与站长邮箱">
+              <template #header-extra>
+                <n-tag :type="state.smtpVerified ? 'success' : 'warning'" size="small" :bordered="false">{{ state.smtpVerified ? '✓ 测试邮件已发送成功' : '未验证' }}</n-tag>
+              </template>
               <n-form label-placement="left" label-width="90">
                 <n-form-item label="站长邮箱">
                   <n-input v-model:value="state.adminEmail" placeholder="验证码与提醒都发到这里" />
