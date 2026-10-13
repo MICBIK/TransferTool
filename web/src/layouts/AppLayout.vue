@@ -11,16 +11,18 @@ const router = useRouter();
 const link = (to: string, label: string) => () => h(RouterLink, { to }, { default: () => label });
 const options: MenuOption[] = [
   { key: 'overview', label: link('/', '总览') },
+  { key: 'upstreams', label: link('/upstreams', '上游') },
   { key: 'channels', label: link('/channels', '渠道') },
   { key: 'settings', label: link('/settings', '设置') },
 ];
-const active = computed(() => (String(route.name ?? '').startsWith('upstream') ? 'overview' : String(route.name ?? 'overview')));
+const active = computed(() => (String(route.name ?? '').startsWith('upstream') ? 'upstreams' : String(route.name ?? 'overview')));
 const title = computed(() => {
   const name = String(route.name ?? '');
   if (name === 'settings') return '设置';
   if (name === 'channels') return '渠道';
   if (name === 'upstream-new') return '添加上游';
   if (name === 'upstream') return '上游详情';
+  if (name === 'upstreams') return '上游';
   return '总览';
 });
 

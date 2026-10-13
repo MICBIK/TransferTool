@@ -85,9 +85,20 @@ export const usd = (n: number | null | undefined): string => (n === null || n ==
 /** 与提醒邮件中的“预计耗尽”文案保持一致。 */
 export function formatEta(exhaustAt: number | null, now = Date.now()): string {
   if (exhaustAt === null) return '无法估算';
+  return `${etaSpan(exhaustAt, now)}后（${shortTime(exhaustAt)}）`;
+}
+
+/** 剩余时长简写：约 5.3 天 / 约 20 小时 / 不足 1 小时 */
+export function etaSpan(exhaustAt: number, now = Date.now()): string {
   const hours = Math.max(0, (exhaustAt - now) / 3600_000);
-  const span = hours >= 48 ? `约 ${(hours / 24).toFixed(1)} 天` : hours >= 1 ? `约 ${hours.toFixed(1)} 小时` : '不足 1 小时';
-  return `${span}后（${new Date(exhaustAt).toLocaleString('zh-CN', { hour12: false })}）`;
+  return hours >= 48 ? `约 ${(hours / 24).toFixed(1)} 天` : hours >= 1 ? `约 ${Math.round(hours)} 小时` : '不足 1 小时';
+}
+
+const pad2 = (n: number) => String(n).padStart(2, '0');
+/** 10-18 10:59 */
+export function shortTime(ts: number): string {
+  const d = new Date(ts);
+  return `${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
 
 /** 消耗速度文案：估算不出来时说明原因，数据不够时给出大约还要等多久。 */

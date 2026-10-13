@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { NAlert, NButton, NCollapse, NCollapseItem, NDynamicTags, NText, NForm, NFormItem, NInput, NInputNumber, NSpace, NSwitch, NRadioButton, NRadioGroup, useMessage } from 'naive-ui';
+import { NAlert, NButton, NCollapse, NCollapseItem, NDivider, NDynamicTags, NForm, NFormItem, NInput, NInputNumber, NRadioButton, NRadioGroup, NSpace, NSwitch, NText, useMessage } from 'naive-ui';
 import { api, ApiError } from '../api';
 import { useNarrow } from '../narrow';
 import { copySecret, usd, type SecretField, type TestResult, type Upstream, type UpstreamType } from '../upstreams';
@@ -165,12 +165,13 @@ async function save() {
 </script>
 
 <template>
-  <n-form :label-placement="narrow ? 'top' : 'left'" label-width="110" style="max-width: 720px">
+  <n-form :label-placement="narrow ? 'top' : 'left'" label-width="96" style="max-width: 720px">
     <n-alert v-if="upstream?.needsSetup" type="info" :show-icon="false" style="margin-bottom: 16px">
       这个上游是根据本站渠道自动创建的。请确认类型，然后到
       <a :href="upstream.siteUrl" target="_blank" rel="noopener noreferrer">{{ upstream.siteUrl }}</a>
       生成{{ form.type === 'newapi' ? '访问令牌（个人设置 → 生成系统访问令牌）' : ' API Key' }}，粘贴到下面保存即可开始监控余额。
     </n-alert>
+    <n-divider title-placement="left" class="sec">连接</n-divider>
     <n-form-item label="名称"><n-input v-model:value="form.name" maxlength="100" placeholder="例如：某某中转站" /></n-form-item>
     <n-form-item label="类型">
       <n-radio-group v-model:value="form.type">
@@ -202,7 +203,7 @@ async function save() {
         方便充值时复制登录。<template v-if="form.type === 'newapi'">新版 new-api 查余额需要用户 ID，填了账号密码会自动登录一次获取，不用手动找。</template>
       </template>
     </n-form-item>
-    <n-collapse v-if="form.type === 'newapi'" :style="narrow ? 'margin: 0 0 18px' : 'margin: 4px 0 18px 110px; max-width: 610px'">
+    <n-collapse v-if="form.type === 'newapi'" :style="narrow ? 'margin: 0 0 18px' : 'margin: 4px 0 18px 96px; max-width: 624px'">
       <n-collapse-item title="高级：手动指定用户 ID" name="userId">
         <n-space :wrap="false" align="center">
           <n-input v-model:value="form.userId" autocomplete="off" placeholder="留空则自动获取" :style="{ width: '240px' }" />
@@ -214,16 +215,18 @@ async function save() {
         </n-text>
       </n-collapse-item>
     </n-collapse>
-    <n-form-item label="提醒阈值 (USD)"><n-input-number v-model:value="form.threshold" :min="0" :show-button="false" style="width: 160px" /></n-form-item>
-    <n-form-item label="紧急阈值 (USD)">
-      <n-input-number v-model:value="form.emergencyThreshold" :min="0" clearable :show-button="false" placeholder="可空" style="width: 160px" />
+    <n-divider title-placement="left" class="sec">提醒</n-divider>
+    <n-form-item label="提醒阈值"><n-input-number v-model:value="form.threshold" :min="0" :show-button="false" style="width: 160px"><template #prefix>$</template></n-input-number></n-form-item>
+    <n-form-item label="紧急阈值">
+      <n-input-number v-model:value="form.emergencyThreshold" :min="0" clearable :show-button="false" placeholder="可空" style="width: 160px"><template #prefix>$</template></n-input-number>
       <span style="margin-left: 12px; opacity: 0.7">须小于提醒阈值；跌破即发，同一状态只发一次</span>
     </n-form-item>
-    <n-form-item label="刷新间隔 (分钟)"><n-input-number v-model:value="form.intervalMinutes" :min="1" :max="1440" :precision="0" style="width: 160px" /></n-form-item>
+    <n-form-item label="刷新间隔"><n-input-number v-model:value="form.intervalMinutes" :min="1" :max="1440" :precision="0" style="width: 160px"><template #suffix>分钟</template></n-input-number></n-form-item>
     <n-form-item label="汇率系数">
       <n-input-number v-model:value="form.rateFactor" :min="0.0001" :max="1000" :show-button="false" style="width: 160px" />
       <span style="margin-left: 12px; opacity: 0.7">上游显示的美元 × 系数 = 折算后的余额</span>
     </n-form-item>
+    <n-divider title-placement="left" class="sec">其他</n-divider>
     <n-form-item label="充值页地址"><n-input v-model:value="form.topupUrl" :placeholder="topupPlaceholder" /></n-form-item>
     <n-form-item label="匹配域名">
       <n-dynamic-tags v-model:value="form.matchDomains" />
@@ -240,9 +243,26 @@ async function save() {
       <template v-else>{{ testResult.error ?? '连接失败' }}</template>
     </n-alert>
 
-    <n-space>
+    <n-space class="actions">
       <n-button :loading="busy.test" :disabled="!form.siteUrl" @click="test">测试连接</n-button>
       <n-button type="primary" :loading="busy.save" @click="save">保存</n-button>
     </n-space>
   </n-form>
 </template>
+
+<style scoped>
+.sec {
+  margin: 8px 0 16px !important;
+  font-size: 13px;
+  color: #6b6a66;
+}
+/* 表单较长：保存按钮固定在可视区域底部 */
+.actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  padding: 12px 0;
+  background: #fff;
+  border-top: 1px solid #f0efec;
+}
+</style>

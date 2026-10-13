@@ -99,14 +99,18 @@ onBeforeUnmount(() => clearInterval(timer));
 </script>
 
 <template>
-  <div style="min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box">
-    <n-card title="TransferTool" style="width: 380px; max-width: 100%">
+  <div style="min-height: 100%; display: flex; align-items: center; justify-content: center; padding: 16px; box-sizing: border-box; background: #f6f6f4">
+    <n-card style="width: 380px; max-width: 100%" :bordered="false" content-style="padding: 28px">
+      <div style="margin-bottom: 20px">
+        <div style="font-size: 20px; font-weight: 600">TransferTool</div>
+        <div style="font-size: 13px; color: #6b6a66; margin-top: 4px">上游余额、渠道健康一站查看</div>
+      </div>
       <n-alert v-if="error" type="error" :show-icon="false" style="margin-bottom: 16px">{{ error }}</n-alert>
       <n-tabs v-model:value="tab" type="line" animated>
         <n-tab-pane v-if="session.methods.password" name="password" tab="密码登录">
           <n-form @submit.prevent="submitPassword">
             <n-form-item label="密码" :show-feedback="false">
-              <n-input v-model:value="password" type="password" show-password-on="click" placeholder="请输入管理员密码" autocomplete="current-password" @keyup.enter="submitPassword" />
+              <n-input v-model:value="password" type="password" show-password-on="click" placeholder="请输入管理员密码" autocomplete="current-password" autofocus @keyup.enter="submitPassword" />
             </n-form-item>
             <n-button type="primary" block attr-type="submit" :loading="loading" :disabled="!password" style="margin-top: 20px" @click="submitPassword">登录</n-button>
           </n-form>
