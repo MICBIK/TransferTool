@@ -9,6 +9,7 @@ import StatTile from '../components/StatTile.vue';
 import { getUpstreamHealth, pct, type HealthStatus } from '../health';
 import UpstreamChannels from '../components/UpstreamChannels.vue';
 import UpstreamForm from '../components/UpstreamForm.vue';
+import MuteControl from '../components/MuteControl.vue';
 import { KEY_LIMIT_HINT, STATUS_META, keyQuotaText, statusLabel, TYPE_LABEL, burnText, etaSpan, formatAgo, shortTime, getHistory, getUpstream, refreshOne, usd, type HistoryPoint, type Upstream } from '../upstreams';
 
 const route = useRoute();
@@ -147,8 +148,10 @@ onMounted(() => void load());
         <span style="font-size: 18px; font-weight: 600">{{ upstream.name }}</span>
         <n-tag size="small" :bordered="false">{{ TYPE_LABEL[upstream.type] }}</n-tag>
         <n-tag size="small" :type="STATUS_META[upstream.status].tag">{{ statusLabel(upstream) }}</n-tag>
+        <n-tag v-if="upstream.channelsStopped && upstream.alertMutedUntil === null" size="small" :bordered="false" title="本站里它的渠道都被手动停用了，余额不足也不会再发提醒">渠道已全部停用，不提醒</n-tag>
       </n-space>
-      <n-space>
+      <n-space align="center">
+        <mute-control :upstream="upstream" @updated="(u) => (upstream = u)" />
         <n-button v-if="upstream.effectiveTopupUrl" type="primary" secondary tag="a" :href="upstream.effectiveTopupUrl" target="_blank" rel="noopener noreferrer">充值</n-button>
         <n-button :loading="refreshing" :disabled="!upstream.enabled || upstream.needsSetup" @click="onRefresh">立即刷新</n-button>
       </n-space>
@@ -226,7 +229,7 @@ onMounted(() => void load());
           <n-card title="危险操作" size="small">
             <n-popconfirm @positive-click="onDelete">
               <template #trigger><n-button type="error" secondary>删除该上游</n-button></template>
-              删除后其余额历史也会一并删除，确定吗？
+              删除后其余额历史也会一并删除。本站里还留着这个站的渠道时，同步不会再把它自动建回来；这些渠道都删掉后，再新增这个站的渠道会重新自动创建。确定吗？
             </n-popconfirm>
           </n-card>
         </n-space>

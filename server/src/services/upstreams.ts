@@ -1,4 +1,4 @@
-import { asc, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { normalizeDomain, normalizeOptionalUrl, normalizeSiteUrl, UrlError, type AdapterUpstream, type BalanceResult, type createAdapters } from '../adapters/index.js';
 import type { AppConfig } from '../config.js';
@@ -135,9 +135,18 @@ export interface UpstreamView {
   exhaustAt: number | null;
   burnBasis: BurnBasis | null;
   needsSetup: boolean;
+  /** 提醒静音中：0 = 直到余额恢复，其他为截止时间；未静音（或已过期）为 null */
+  alertMutedUntil: number | null;
+  /** 本站里它的渠道已被站长全部手动停用：不再提醒 */
+  channelsStopped: boolean;
   createdAt: number;
   updatedAt: number;
 }
+
+/** 为什么这个上游现在不发提醒：静音中 / 渠道已全部停用 */
+export type QuietReason = 'muted' | 'stopped';
+
+export const MUTE_UNTIL_RECOVERY = 0;
 
 export function parseDomains(json: string): string[] {
   try {
@@ -182,6 +191,39 @@ export class UpstreamService {
       adapters: ReturnType<typeof createAdapters>;
     },
   ) {}
+
+  private channelsStopped: (upstreamId: number) => boolean = () => false;
+
+  /** 渠道服务创建得比本服务晚，启动时再接上（判断“渠道已全部停用”） */
+  setChannelsStoppedProbe(fn: (upstreamId: number) => boolean): void {
+    this.channelsStopped = fn;
+  }
+
+  /** 静音是否仍有效 */
+  mutedUntil(row: UpstreamRow, now: number): number | null {
+    const v = row.alertMutedUntil;
+    if (v === null) return null;
+    return v === MUTE_UNTIL_RECOVERY || v > now ? v : null;
+  }
+
+  quietReason(row: UpstreamRow, now: number): QuietReason | null {
+    if (this.mutedUntil(row, now) !== null) return 'muted';
+    if (this.channelsStopped(row.id)) return 'stopped';
+    return null;
+  }
+
+  /** until：null 取消静音；0 静音到余额恢复；其他为截止时间 */
+  setAlertMute(id: number, until: number | null, ip?: string): UpstreamRow {
+    this.require(id);
+    const row = this.deps.db.update(upstreams).set({ alertMutedUntil: until }).where(eq(upstreams.id, id)).returning().get();
+    this.deps.audit.record(until === null ? 'upstream.alert_unmuted' : 'upstream.alert_muted', { target: `upstream:${id}`, ip, detail: until === null ? undefined : until === MUTE_UNTIL_RECOVERY ? 'until_recovery' : String(until) });
+    return row;
+  }
+
+  /** 余额恢复后，「静音到余额恢复」自动失效 */
+  clearRecoveryMute(id: number): void {
+    this.deps.db.update(upstreams).set({ alertMutedUntil: null }).where(and(eq(upstreams.id, id), eq(upstreams.alertMutedUntil, MUTE_UNTIL_RECOVERY))).run();
+  }
 
   private enc(field: SecretField, value: string): string {
     return encrypt(value, this.deps.config.encryptionKey, `upstreams.${field}`);
@@ -464,6 +506,8 @@ export class UpstreamService {
       /** 无法估算时的原因，便于前端给出“还要等多久” */
       burnBasis: burn?.basis ?? null,
       needsSetup: row.needsSetup,
+      alertMutedUntil: this.mutedUntil(row, now),
+      channelsStopped: this.channelsStopped(row.id),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };

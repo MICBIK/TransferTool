@@ -1,0 +1,1 @@
+ALTER TABLE `upstreams` ADD `alert_muted_until` integer;

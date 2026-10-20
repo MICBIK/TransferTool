@@ -194,7 +194,13 @@ export class ChannelService {
     });
   }
 
-  /** 站长删过的上游域名：之后不再自动创建。 */
+  /** 该上游在本站有渠道，且全部是站长手动停用的（不含余额归零时本工具停的）。 */
+  allStopped(upstreamId: number): boolean {
+    const rows = this.rowsForUpstream(upstreamId);
+    return rows.length > 0 && rows.every((r) => r.status !== 1 && r.autoDisabledAt === null);
+  }
+
+  /** 站长删过的上游域名：只要本站还有这个域名的渠道，就不再自动创建。 */
   ignoredDomains(): string[] {
     return parseDomains(this.deps.settings.get('ignored_upstream_domains') ?? '[]');
   }
@@ -210,7 +216,12 @@ export class ChannelService {
    */
   private async autoCreateUpstreams(): Promise<number> {
     const ownHost = hostOf(this.deps.ownSite.connection()?.siteUrl ?? '');
-    const skip = new Set(this.ignoredDomains());
+    // 删除上游时记下的域名，只在本站还留着它的渠道时生效：渠道清空后再加回来，会重新自动建上游
+    const present = new Set(this.rows().map((r) => hostOf(r.baseUrl)).filter((h): h is string => !!h).map((h) => baseDomain(h)));
+    const ignored = this.ignoredDomains();
+    const kept = ignored.filter((d) => present.has(d));
+    if (kept.length !== ignored.length) this.deps.settings.set('ignored_upstream_domains', JSON.stringify(kept));
+    const skip = new Set(kept);
     if (ownHost) skip.add(baseDomain(ownHost));
     for (const u of this.deps.upstreams.list()) for (const d of parseDomains(u.matchDomains)) skip.add(baseDomain(d));
 

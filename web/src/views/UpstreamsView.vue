@@ -7,7 +7,7 @@ import { channelSummary, type ChannelCount } from '../channels';
 import HealthNotices from '../components/HealthNotices.vue';
 import HealthTag from '../components/HealthTag.vue';
 import { getHealth, type HealthOverview, type UpstreamRollup } from '../health';
-import { STATUS_META, keyQuotaText, statusLabel, TYPE_LABEL, burnText, etaText, formatAgo, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
+import { STATUS_META, keyQuotaText, quietText, statusLabel, TYPE_LABEL, burnText, etaText, formatAgo, listUpstreams, refreshAll, refreshOne, sortUpstreams, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
 const upstreams = ref<Upstream[]>([]);
@@ -120,6 +120,7 @@ onBeforeUnmount(() => clearInterval(timer));
             <n-space :size="6">
               <n-tag size="small" :bordered="false">{{ TYPE_LABEL[u.type] }}</n-tag>
               <n-tag size="small" :type="STATUS_META[u.status].tag">{{ statusLabel(u) }}</n-tag>
+              <n-tag v-if="quietText(u)" size="small" :bordered="false" :title="quietText(u)!">不提醒</n-tag>
             </n-space>
           </template>
 

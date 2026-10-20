@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { auditLog, channels, settings } from '../src/db/schema.js';
 import { jsonRes } from './fakeFetch.js';
 import { fakeOwnSite, OWN, OWN_TOKEN, type FakeChannel } from './fakeOwnSite.js';
-import { json, login, makeHarness, post, request, type Harness } from './helpers.js';
+import { configureMail, json, login, makeHarness, post, request, type Harness } from './helpers.js';
 
 const ch = (id: number, base_url: string, over: Partial<FakeChannel> = {}): FakeChannel => ({ id, name: `渠道${id}`, base_url, group: 'default', status: 1, key: `sk-SECRET-${id}`, ...over });
 
@@ -168,6 +168,38 @@ describe('渠道同步与归类', () => {
     const again = await json(await request(h, 'POST', '/api/channels/sync', {}, { cookie }));
     expect(again.result).toMatchObject({ ok: true, autoCreated: 0 });
     expect(h.s.upstreams.list().map((u) => u.name)).toEqual(['llmgw']);
+
+    // 本站把它的渠道都删掉后，记录失效；之后再加这个站的渠道，会重新自动建上游
+    site.state.channels = site.state.channels.filter((c) => c.id !== 4);
+    await post(h, '/api/channels/sync', {}, { cookie });
+    expect(h.s.channels.ignoredDomains()).toEqual([]);
+    site.state.channels.push(ch(7, 'https://8yes.cc/v1'));
+    const back = await json(await request(h, 'POST', '/api/channels/sync', {}, { cookie }));
+    expect(back.result).toMatchObject({ ok: true, autoCreated: 1 });
+    expect(h.s.channels.find(7)?.upstreamId).not.toBeNull();
+  });
+
+  it('渠道被站长全部手动停用的上游不再发余额提醒；余额归零时本工具停的不算', async () => {
+    const { h, cookie, site } = await setup();
+    await configureMail(h, cookie);
+    const up = addUpstream(h, 'a.example.com');
+    site.state.channels = [ch(1, 'https://a.example.com', { status: 2 }), ch(2, 'https://a.example.com/v1', { status: 2 })];
+    wire(h, site, { 'a.example.com': 50 });
+    await connect(h, cookie);
+    expect(h.s.channels.allStopped(up.id)).toBe(true);
+    expect(h.s.upstreams.view(up).channelsStopped).toBe(true);
+    wire(h, site, { 'a.example.com': 1 });
+    await h.s.refresher.run({ ids: [up.id], force: true });
+    expect(h.sent).toHaveLength(0);
+    expect(h.s.store.getAlert(up.id)?.lastResult).toBe('渠道已全部停用，未发送');
+
+    // 有一个渠道重新启用：恢复提醒（按间隔）
+    site.state.channels[0]!.status = 1;
+    await post(h, '/api/channels/sync', {}, { cookie });
+    expect(h.s.channels.allStopped(up.id)).toBe(false);
+    // 本工具停的渠道（autoDisabledAt 非空）不算站长停用
+    h.db.update(channels).set({ status: 2, autoDisabledAt: 1 }).run();
+    expect(h.s.channels.allStopped(up.id)).toBe(false);
   });
 
   it('手动指定优先且不被同步覆盖；取消手动后恢复自动归类；上游新增匹配域名后立即重归类', async () => {

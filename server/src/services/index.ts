@@ -77,9 +77,10 @@ export function buildServices(config: AppConfig, db: Db, overrides: ServiceOverr
   const ownSiteClient = createOwnSiteClient(adapterDeps);
   const store = new BalanceStore(db);
   const upstreams = new UpstreamService({ config, db, store, audit, clock, adapters });
-  const alerts = new AlertService({ store, mailer, settings, clock });
+  const alerts = new AlertService({ store, mailer, settings, clock, upstreams });
   const ownSite = new OwnSiteService({ settings, audit, client: ownSiteClient });
   const channels = new ChannelService({ db, ownSite, client: ownSiteClient, upstreams, audit, clock, settings, detectType: (siteUrl, signal) => adapters.detectType(siteUrl, { signal }) });
+  upstreams.setChannelsStoppedProbe((id) => channels.allStopped(id));
   const automation = new ChannelAutomation({ channels, settings, audit });
   const channelStats = new ChannelStatsStore(db);
   const logIngestor = new LogIngestor({ settings, ownSite, client: ownSiteClient, stats: channelStats, clock, ...overrides.logIngest });

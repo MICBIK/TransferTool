@@ -11,6 +11,7 @@ import {
   UpstreamValidationError,
   updateUpstreamSchema,
   parseDomains,
+  MUTE_UNTIL_RECOVERY,
   type SecretField,
 } from '../services/upstreams.js';
 
@@ -92,10 +93,23 @@ export function upstreamRoutes(s: Services): Hono {
     if (id === null || !s.upstreams.find(id)) return notFound(c);
     const removed = s.upstreams.require(id);
     s.upstreams.remove(id, clientIp(c, s.config.trustProxy));
-    // 删掉的上游不再根据渠道自动建回来
+    // 删掉的上游不再根据现有渠道自动建回来；这些渠道都从本站删掉之后，记录自动失效
     s.channels.ignoreDomains(parseDomains(removed.matchDomains));
     await s.channels.reclassify(); // 外键已把它的渠道置为未归类，这里按剩余上游重新归类
     return c.json({ ok: true });
+  });
+
+  /** 提醒静音：1d / 7d / 直到余额恢复 / 取消。静音期间不发邮件，总览「需要处理」里也不显示。 */
+  const muteSchema = z.object({ mode: z.enum(['1d', '7d', 'recover', 'off']) });
+  app.post('/:id/mute', async (c) => {
+    const id = parseId(c.req.param('id'));
+    if (id === null || !s.upstreams.find(id)) return notFound(c);
+    const body = await parseBody(c, muteSchema);
+    if (!body.ok) return body.response;
+    const now = s.clock();
+    const until = { '1d': now + DAY_MS, '7d': now + 7 * DAY_MS, recover: MUTE_UNTIL_RECOVERY, off: null }[body.data.mode];
+    const row = s.upstreams.setAlertMute(id, until, clientIp(c, s.config.trustProxy));
+    return c.json({ upstream: s.upstreams.view(row) });
   });
 
   app.post('/:id/refresh', async (c) => {
