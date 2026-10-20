@@ -38,6 +38,10 @@ export interface Upstream {
   burnBasis: 'estimated' | 'collecting' | 'no_usage' | null;
   /** 根据本站渠道自动创建、还没填凭证 */
   needsSetup: boolean;
+  /** 提醒静音：0 = 直到余额恢复，其他为截止时间；未静音为 null */
+  alertMutedUntil: number | null;
+  /** 本站里它的渠道已被全部手动停用，不再提醒 */
+  channelsStopped: boolean;
 }
 
 export interface TestResult {
@@ -60,6 +64,23 @@ export const refreshAll = () => api<{ upstreams: Upstream[] }>('/api/upstreams/r
 export const refreshOne = (id: number) => api<{ upstream: Upstream }>(`/api/upstreams/${id}/refresh`, { body: {} }).then((r) => r.upstream);
 export const getHistory = (id: number, days: number) =>
   api<{ points: HistoryPoint[]; threshold: number; emergencyThreshold: number | null }>(`/api/upstreams/${id}/history?days=${days}`);
+export type MuteMode = '1d' | '7d' | 'recover' | 'off';
+export const muteUpstream = (id: number, mode: MuteMode) => api<{ upstream: Upstream }>(`/api/upstreams/${id}/mute`, { body: { mode } }).then((r) => r.upstream);
+export const MUTE_OPTIONS: { label: string; key: MuteMode }[] = [
+  { label: '忽略 1 天', key: '1d' },
+  { label: '忽略 7 天', key: '7d' },
+  { label: '忽略到余额恢复', key: 'recover' },
+];
+/** 提醒已静音（至 10-21 12:00）/（直到余额恢复） */
+export function muteText(u: Pick<Upstream, 'alertMutedUntil'>): string | null {
+  if (u.alertMutedUntil === null) return null;
+  return u.alertMutedUntil === 0 ? '提醒已静音，直到余额恢复' : `提醒已静音，至 ${shortTime(u.alertMutedUntil)}`;
+}
+/** 不提醒的原因（静音优先） */
+export function quietText(u: Pick<Upstream, 'alertMutedUntil' | 'channelsStopped'>): string | null {
+  return muteText(u) ?? (u.channelsStopped ? '渠道已全部停用，不提醒' : null);
+}
+
 export const copySecret = (id: number, field: SecretField) =>
   api<{ value: string }>(`/api/upstreams/${id}/secrets/${field}/copy`, { body: {} }).then((r) => r.value);
 

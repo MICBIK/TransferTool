@@ -5,7 +5,7 @@ import type { Clock } from './clock.js';
 import { COLORS, button, escapeHtml, layout, paragraph, pill, safeHref } from './mailTemplates.js';
 import { MailerError, type Mailer } from './mailer.js';
 import type { SettingsStore } from './settings.js';
-import type { UpstreamRow } from './upstreams.js';
+import type { UpstreamRow, UpstreamService } from './upstreams.js';
 
 export const DEFAULT_ALERT_REPEAT_HOURS = 6;
 
@@ -114,7 +114,14 @@ export interface AlertCandidate {
 /** 把状态机的判定落到数据库，并把同一轮的多个提醒合并为一封邮件。 */
 export class AlertService {
   constructor(
-    private readonly deps: { store: BalanceStore; mailer: Mailer; settings: SettingsStore; clock: Clock },
+    private readonly deps: {
+      store: BalanceStore;
+      mailer: Mailer;
+      settings: SettingsStore;
+      clock: Clock;
+      /** 静音、渠道全停用时不发信；缺省时总是发 */
+      upstreams?: Pick<UpstreamService, 'quietReason' | 'clearRecoveryMute'>;
+    },
   ) {}
 
   async process(candidates: AlertCandidate[]): Promise<{ sent: number }> {
@@ -134,6 +141,13 @@ export class AlertService {
         now,
         repeatIntervalMs,
       });
+      if (d.next.state === 'normal' && c.balanceUsd !== null) this.deps.upstreams?.clearRecoveryMute(c.upstream.id);
+      const quiet = d.send ? (this.deps.upstreams?.quietReason(c.upstream, now) ?? null) : null;
+      if (quiet && d.next.state !== 'normal') {
+        // 静音 / 渠道全停用：照常推进状态并当作“已提醒过”，之后按正常间隔计算，不会在取消静音的瞬间补发一堆
+        store.saveAlert(c.upstream.id, { state: d.next.state, lastSentAt: now }, quiet === 'muted' ? '已静音，未发送' : '渠道已全部停用，未发送', now);
+        continue;
+      }
       if (!d.send || c.balanceUsd === null || d.next.state === 'normal' || d.reason === null) {
         // 状态有变化但无需发信（恢复、critical→low 等）直接落库；保留上次发信结果
         if (d.next.state !== prev.state || d.next.lastSentAt !== prev.lastSentAt) store.saveAlert(c.upstream.id, d.next, stored?.lastResult ?? null, now);

@@ -36,6 +36,13 @@
       "when": 1791827263914,
       "tag": "0004_upstream_needs_setup",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1792494442599,
+      "tag": "0005_upstream_alert_mute",
+      "breakpoints": true
     }
   ]
 }

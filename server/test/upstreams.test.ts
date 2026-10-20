@@ -210,6 +210,44 @@ describe('上游接口', () => {
 });
 
 describe('余额提醒（端到端，假 fetch + 假 SMTP）', () => {
+  it('静音：期间不发信；到期后按正常间隔继续；「直到余额恢复」在恢复后自动解除', async () => {
+    const { h, cookie } = await setup();
+    await configureMail(h, cookie);
+    const state = { usd: 50 };
+    fakeNewApi(h, state);
+    const { upstream } = await json(await request(h, 'POST', '/api/upstreams', NEW, { cookie }));
+    const refresh = () => request(h, 'POST', `/api/upstreams/${upstream.id}/refresh`, {}, { cookie });
+    const mute = (mode: string) => request(h, 'POST', `/api/upstreams/${upstream.id}/mute`, { mode }, { cookie });
+
+    expect((await mute('forever')).status).toBe(400);
+    const muted = await json(await mute('1d'));
+    expect(muted.upstream.alertMutedUntil).toBe(h.clock.now + 24 * 3600_000);
+    h.clock.now += 600_000;
+    state.usd = 8;
+    await refresh();
+    expect(h.sent).toHaveLength(0);
+    expect(h.s.upstreams.view(h.s.upstreams.require(upstream.id)).alertLastResult).toBe('已静音，未发送');
+    // 静音到期后不立刻补发，按提醒间隔继续
+    h.clock.now += 25 * 3600_000;
+    await refresh();
+    expect(h.sent).toHaveLength(1);
+    expect(h.s.upstreams.view(h.s.upstreams.require(upstream.id)).alertMutedUntil).toBeNull();
+
+    // 直到余额恢复：低于阈值期间一直静音，恢复后解除，下次跌破照常提醒
+    expect((await json(await mute('recover'))).upstream.alertMutedUntil).toBe(0);
+    h.clock.now += 7 * 3600_000;
+    state.usd = 1;
+    await refresh();
+    expect(h.sent).toHaveLength(1);
+    state.usd = 100;
+    await refresh();
+    expect(h.s.upstreams.require(upstream.id).alertMutedUntil).toBeNull();
+    state.usd = 8;
+    await refresh();
+    expect(h.sent).toHaveLength(2);
+    expect((await json(await mute('off'))).upstream.alertMutedUntil).toBeNull();
+  });
+
   it('跌破阈值发一封；间隔内不重发；满间隔重发；恢复后再次跌破重新发', async () => {
     const { h, cookie } = await setup();
     await configureMail(h, cookie);

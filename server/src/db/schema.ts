@@ -76,6 +76,8 @@ export const upstreams = sqliteTable('upstreams', {
   passwordEnc: text('password_enc'),
   /** 根据本站渠道自动创建、还没填凭证的上游：不刷新、不提醒，等站长确认类型并填入密钥 */
   needsSetup: integer('needs_setup', { mode: 'boolean' }).notNull().default(false),
+  /** 提醒静音：null 未静音；0 静音到余额恢复；其他为静音截止时间（毫秒） */
+  alertMutedUntil: integer('alert_muted_until'),
   /** 调度状态：最近一次尝试时间与连续失败次数（>=3 视为“余额未知”） */
   lastCheckedAt: integer('last_checked_at'),
   consecutiveFailures: integer('consecutive_failures').notNull().default(0),

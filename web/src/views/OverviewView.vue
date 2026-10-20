@@ -28,7 +28,8 @@ import {
 } from '../dashboard';
 import { HEALTH_RANK, getHealth, type ChannelHealth, type HealthOverview, type UpstreamRollup } from '../health';
 import { useNarrow } from '../narrow';
-import { STATUS_META, statusLabel, burnText, etaSpan, formatAgo, listUpstreams, refreshAll, usd, type Upstream } from '../upstreams';
+import MuteControl from '../components/MuteControl.vue';
+import { STATUS_META, quietText, statusLabel, burnText, etaSpan, formatAgo, listUpstreams, refreshAll, usd, type Upstream } from '../upstreams';
 
 const message = useMessage();
 const narrow = useNarrow();
@@ -131,17 +132,20 @@ interface Issue {
   tag: string;
   text: string;
   action: { label: string; to?: string; href?: string };
+  upstream: Upstream;
 }
 
-const issues = computed<Issue[]>(() => {
+/** 所有提醒（静音、渠道全停用的也算），再分成要显示的和被忽略的 */
+const allIssues = computed<Issue[]>(() => {
   const out: Issue[] = [];
+  const push = (u: Upstream, i: Omit<Issue, 'upstream'>) => out.push({ ...i, upstream: u });
   for (const u of upstreams.value) {
     if (!u.enabled) continue;
     if (u.needsSetup) {
-      out.push({ key: `setup-${u.id}`, level: 'info', tag: '待配置', text: `${u.name}：自动创建的上游，还没填密钥`, action: { label: '填入密钥', to: `/upstreams/${u.id}#config` } });
+      push(u, { key: `setup-${u.id}`, level: 'info', tag: '待配置', text: `${u.name}：自动创建的上游，还没填密钥`, action: { label: '填入密钥', to: `/upstreams/${u.id}#config` } });
     } else if (u.status === 'critical' || u.status === 'low') {
       const eta = u.burnBasis === 'estimated' && u.exhaustAt !== null ? `，按当前速度${etaSpan(u.exhaustAt, now.value)}后用完` : '';
-      out.push({
+      push(u, {
         key: `bal-${u.id}`,
         level: u.status === 'critical' ? 'error' : 'warning',
         tag: statusLabel(u),
@@ -149,11 +153,11 @@ const issues = computed<Issue[]>(() => {
         action: u.effectiveTopupUrl ? { label: '去充值', href: u.effectiveTopupUrl } : { label: '查看', to: `/upstreams/${u.id}` },
       });
     } else if (u.status === 'unknown') {
-      out.push({ key: `err-${u.id}`, level: 'error', tag: '查询失败', text: `${u.name}：${u.lastError ?? '余额查询失败'}`, action: { label: '检查配置', to: `/upstreams/${u.id}#config` } });
+      push(u, { key: `err-${u.id}`, level: 'error', tag: '查询失败', text: `${u.name}：${u.lastError ?? '余额查询失败'}`, action: { label: '检查配置', to: `/upstreams/${u.id}#config` } });
     }
     const r = rollups.value.get(u.id);
     if (r && (r.status === 'down' || r.status === 'degraded')) {
-      out.push({
+      push(u, {
         key: `health-${u.id}`,
         level: r.status === 'down' ? 'error' : 'warning',
         tag: r.status === 'down' ? '渠道异常' : '渠道降级',
@@ -165,6 +169,16 @@ const issues = computed<Issue[]>(() => {
   const order = { error: 0, warning: 1, info: 2 };
   return out.sort((a, b) => order[a.level] - order[b.level]);
 });
+const issues = computed(() => allIssues.value.filter((i) => quietText(i.upstream) === null));
+/** 有问题但被忽略的上游（静音或渠道全停用），在列表底部列出，方便恢复 */
+const quieted = computed(() => {
+  const seen = new Map<number, Upstream>();
+  for (const i of allIssues.value) if (quietText(i.upstream) !== null) seen.set(i.upstream.id, i.upstream);
+  return [...seen.values()];
+});
+function onMuted(u: Upstream) {
+  upstreams.value = upstreams.value.map((x) => (x.id === u.id ? u : x));
+}
 
 // ---------- 渠道状态 ----------
 
@@ -482,12 +496,22 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
 
       <health-notices :health="health" />
 
-      <n-card v-if="issues.length" size="small" title="需要处理">
+      <n-card v-if="issues.length || quieted.length" size="small" title="需要处理">
         <div v-for="i in issues" :key="i.key" class="issue">
           <n-tag size="small" :type="i.level" :bordered="false" style="flex: none">{{ i.level === 'error' ? '✕' : i.level === 'warning' ? '!' : 'i' }} {{ i.tag }}</n-tag>
           <span class="issue-text">{{ i.text }}</span>
+          <mute-control :upstream="i.upstream" size="tiny" label="忽略" @updated="onMuted" />
           <n-button v-if="i.action.href" size="tiny" secondary tag="a" :href="i.action.href" target="_blank" rel="noopener noreferrer">{{ i.action.label }}</n-button>
           <router-link v-else :to="i.action.to!" custom v-slot="{ navigate }"><n-button size="tiny" secondary @click="navigate">{{ i.action.label }}</n-button></router-link>
+        </div>
+        <n-text v-if="!issues.length" depth="3" style="display: block; padding: 6px 0; font-size: 13px">没有需要处理的事项。</n-text>
+        <div v-if="quieted.length" class="quieted">
+          <span>已忽略：</span>
+          <span v-for="u in quieted" :key="u.id" class="quieted-item">
+            <router-link :to="`/upstreams/${u.id}`" style="color: inherit">{{ u.name }}</router-link>
+            <n-text depth="3">（{{ quietText(u) }}）</n-text>
+            <mute-control v-if="u.alertMutedUntil !== null" :upstream="u" size="tiny" @updated="onMuted" class="unmute" />
+          </span>
         </div>
       </n-card>
 
@@ -641,6 +665,22 @@ const columns = computed<DataTableColumns<Upstream>>(() => [
 }
 .issue:last-child {
   border-bottom: none;
+}
+.quieted {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding-top: 8px;
+  font-size: 12px;
+  color: #6b6a66;
+}
+.quieted-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.quieted-item :deep(.n-tag) {
+  display: none;
 }
 .issue-text {
   flex: 1;
